@@ -5,7 +5,7 @@ author:             Ben Gamari
 maintainer:         ben@smart-cactus.org
 
 library
-    exposed-modules:  Build, CabalPlan
+    exposed-modules:  Build, BuildOne, CabalPlan, Utils
     hs-source-dirs:   src
     build-depends:    base ^>=4.15.1.0,
                       process,

@@ -7,6 +7,7 @@ module CabalPlan
     , PkgId(..)
     , PkgName(..)
     , FlagSpec(..)
+    , ComponentName(..)
     , showFlagSpec
     , PlanUnit(..)
     ) where
@@ -40,17 +41,13 @@ showFlagSpec (FlagSpec fs) =
     , let sign = if value then "+" else "-"
     ]
 
-data ComponentName = Library | Other T.Text
-    deriving (Show)
-
-instance FromJSON ComponentName where
-    parseJSON = withText "component name" $ \s ->
-        case s of 
-          "lib" -> return $ Library
-          other -> return $ Other other
+newtype ComponentName = ComponentName { getComponentName :: T.Text }
+    deriving (Eq, Ord, Show, FromJSON)
 
 data PlanUnit
     = PreexistingUnit { puId :: PkgId
+                      , puPkgName :: PkgName
+                      , puVersion :: Version
                       , puDepends :: [PkgId]
                       } 
     | ConfiguredUnit { puId :: PkgId
@@ -72,6 +69,8 @@ instance FromJSON PlanUnit where
       where
         preExisting o = do
             puId <- o .: "id"
+            puPkgName <- o .: "pkg-name"
+            puVersion <- o .: "pkg-version"
             puDepends <- o .: "depends"
             return $ PreexistingUnit {..}
 

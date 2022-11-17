@@ -25,11 +25,12 @@ data Compiler = Compiler { ghcPath :: FilePath
                          }
 
 buildPackage :: FilePath -- ^ source directory
+             -> ComponentName
              -> FilePath -- ^ installation prefix
              -> Compiler -- ^ compiler
              -> FlagSpec -- ^ flags
              -> IO ()
-buildPackage srcDir installDir comp flags = withSystemTempDirectory "build" $ \dir -> do
+buildPackage srcDir component installDir comp flags = withSystemTempDirectory "build" $ \dir -> do
     setupHs <- findSetupHs srcDir
     let pkgDbDir = installDir </> "package.conf"
     createDirectoryIfMissing True pkgDbDir
@@ -37,7 +38,10 @@ buildPackage srcDir installDir comp flags = withSystemTempDirectory "build" $ \d
     callProcessIn "." (ghcPath comp) [setupHs, "-o", srcDir </> "Setup"]
     let configureArgs = [ "--prefix", installDir
                         , "--flags=" ++ showFlagSpec flags
-                        ]
+                        , "--package-db=" ++ pkgDbDir
+                        ] ++ if component /= ComponentName (T.pack "lib")
+                                then [T.unpack $ getComponentName component]
+                                else []
     callProcessIn srcDir "./Setup" $ ["configure"] ++ configureArgs
     callProcessIn srcDir "./Setup" ["build"]
     callProcessIn srcDir "./Setup" ["copy"]
