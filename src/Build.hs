@@ -1,8 +1,12 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Build where
+module Build
+    ( PkgSpec(..)
+    , computePlan
+    , buildPlan
+    , test
+    ) where
 
 import Control.Applicative
 import Control.Monad.Fix
@@ -33,8 +37,8 @@ data PkgSpec = PkgSpec { psName :: PkgName
 
 cabalPath = "cabal"
 
-getPlan :: [PkgSpec] -> IO CabalPlan
-getPlan pkgs = withTempDir "build" $ \dir -> do
+computePlan :: [PkgSpec] -> IO CabalPlan
+computePlan pkgs = withTempDir "build" $ \dir -> do
     writeFile (dir </> "cabal.project") projectContents
     writeFile (dir </> "dummy-package.cabal") cabalContents
     callProcessIn dir cabalPath ["configure", "-v0"]
@@ -77,7 +81,8 @@ allDepends (PreexistingUnit{puDepends}) = puDepends
 allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDepends
 
 buildPlan :: FilePath -> Compiler -> CabalPlan -> IO ()
-buildPlan installDir comp cabalPlan = do
+buildPlan installDir0 comp cabalPlan = do
+    installDir <- canonicalizePath installDir0
     let sorted = filter (\pu -> puId pu /= PkgId "dummy-package-0-inplace") $ sortPlan cabalPlan
     let doPkg :: PlanUnit -> IO ()
         doPkg (PreexistingUnit{}) = return ()
@@ -104,14 +109,13 @@ cabalFetch root pkgName version = do
 pkgNameVersion :: PkgName -> Version -> String
 pkgNameVersion (PkgName n) v = T.unpack n <> "-" <> showVersion v
 
-main :: IO ()
-main = do
-    putStrLn "Hello, Haskell!"
-    plan <- getPlan
+test :: IO ()
+test = do
+    plan <- computePlan
         [ PkgSpec { psName = PkgName "lens", psConstraints = Nothing, psFlags = mempty }
         ]
     print plan
     let comp = Compiler "ghc" "ghc-pkg"
-    installDir <- canonicalizePath "install"
+        installDir = "install"
     buildPlan installDir comp plan
 
