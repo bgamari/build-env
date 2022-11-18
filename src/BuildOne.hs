@@ -10,7 +10,6 @@ import Data.Version
 import System.Directory
 import System.Exit
 import System.FilePath
-import System.IO.Temp
 import System.Process
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as M
@@ -30,7 +29,7 @@ buildPackage :: FilePath -- ^ source directory
              -> Compiler -- ^ compiler
              -> FlagSpec -- ^ flags
              -> IO ()
-buildPackage srcDir component installDir comp flags = withSystemTempDirectory "build" $ \dir -> do
+buildPackage srcDir component installDir comp flags = withTempDir "build" $ \dir -> do
     setupHs <- findSetupHs srcDir
     let pkgDbDir = installDir </> "package.conf"
     createDirectoryIfMissing True pkgDbDir
@@ -39,14 +38,19 @@ buildPackage srcDir component installDir comp flags = withSystemTempDirectory "b
     let configureArgs = [ "--prefix", installDir
                         , "--flags=" ++ showFlagSpec flags
                         , "--package-db=" ++ pkgDbDir
-                        ] ++ if component /= ComponentName (T.pack "lib")
-                                then [T.unpack $ getComponentName component]
-                                else []
+                        ] ++ [T.unpack $ unComponentName component]
     callProcessIn srcDir "./Setup" $ ["configure"] ++ configureArgs
     callProcessIn srcDir "./Setup" ["build"]
     callProcessIn srcDir "./Setup" ["copy"]
-    callProcessIn srcDir "./Setup" ["register", "--gen-pkg-config=tmp.conf"]
-    callProcessIn srcDir (ghcPkgPath comp) [ "register", "--package-db", pkgDbDir, "tmp.conf"]
+    let pkgReg = "pkg-reg.conf"
+    callProcessIn srcDir "./Setup" ["register", "--gen-pkg-config=" ++ pkgReg]
+    is_dir <- doesDirectoryExist (srcDir </> pkgReg)
+    regFiles <- if is_dir
+        then map ((srcDir </> pkgReg) </>) <$> listDirectory (srcDir </> pkgReg)
+        else return [srcDir </> pkgReg]
+    let register regFile = 
+          callProcessIn srcDir (ghcPkgPath comp) [ "register", "--package-db", pkgDbDir, regFile]
+    mapM_ register regFiles
 
 oneOf :: [IO (Maybe a)] -> IO (Maybe a)
 oneOf = foldr f (return Nothing)

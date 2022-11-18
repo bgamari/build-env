@@ -11,7 +11,6 @@ import Data.Version
 import qualified Data.Graph as Graph
 import System.Directory
 import System.FilePath
-import System.IO.Temp
 import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map.Strict as M
 import qualified Data.Map.Lazy as ML
@@ -33,7 +32,7 @@ data PkgSpec = PkgSpec { psName :: PkgName
 cabalPath = "cabal"
 
 getPlan :: [PkgSpec] -> IO CabalPlan
-getPlan pkgs = withSystemTempDirectory "build" $ \dir -> do
+getPlan pkgs = withTempDir "build" $ \dir -> do
     writeFile (dir </> "cabal.project") projectContents
     writeFile (dir </> "dummy-package.cabal") cabalContents
     callProcessIn dir cabalPath ["configure", "-v0"]
@@ -80,7 +79,7 @@ buildPlan installDir comp cabalPlan = do
     putStrLn $ "building:\n" ++ unlines (map (show . puId) sorted)
     let doPkg :: PlanUnit -> IO ()
         doPkg (PreexistingUnit{}) = return ()
-        doPkg pu@(ConfiguredUnit{}) = withSystemTempDirectory "source" $ \dir -> do
+        doPkg pu@(ConfiguredUnit{}) = withTempDir "source" $ \dir -> do
             putStrLn $ "building " ++ show (puId pu)
             srcDir <- cabalFetch dir (puPkgName pu) (puVersion pu)
             buildPackage srcDir (puComponentName pu) installDir comp (puFlags pu)

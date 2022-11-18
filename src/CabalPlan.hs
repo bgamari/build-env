@@ -41,8 +41,8 @@ showFlagSpec (FlagSpec fs) =
     , let sign = if value then "+" else "-"
     ]
 
-newtype ComponentName = ComponentName { getComponentName :: T.Text }
-    deriving (Eq, Ord, Show, FromJSON)
+newtype ComponentName = ComponentName { unComponentName :: T.Text }
+    deriving (Eq, Ord, Show)
 
 data PlanUnit
     = PreexistingUnit { puId :: PkgId
@@ -78,7 +78,10 @@ instance FromJSON PlanUnit where
             puId <- o .: "id"
             puPkgName <- o .: "pkg-name"
             puVersion <- o .: "pkg-version"
-            puComponentName <- o .: "component-name"
+            compName <- o .: "component-name"
+            let puComponentName = ComponentName $ case compName of
+                                    "lib" -> unPkgName puPkgName
+                                    other -> other
             puFlags <- o .: "flags"
             puDepends <- o .: "depends"
             --puSetupDepends <- o .: "setup-depends"

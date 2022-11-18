@@ -1,7 +1,9 @@
 module Utils
     ( callProcessIn
+    , withTempDir
     ) where
 
+import System.IO.Temp
 import System.Process
 import System.Exit
 
@@ -14,3 +16,12 @@ callProcessIn cwd exe args = do
     ExitSuccess <- waitForProcess ph
     return ()
 
+noDelete :: Bool
+noDelete = True
+
+withTempDir :: String -> (FilePath -> IO a) -> IO a
+withTempDir name k
+  | noDelete  = do 
+       root <- getCanonicalTemporaryDirectory
+       createTempDirectory root name >>= k
+  | otherwise = withSystemTempDirectory name k
