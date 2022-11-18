@@ -36,7 +36,7 @@ getPlan pkgs = withTempDir "build" $ \dir -> do
     writeFile (dir </> "cabal.project") projectContents
     writeFile (dir </> "dummy-package.cabal") cabalContents
     callProcessIn dir cabalPath ["configure", "-v0"]
-    mb_plan <- Aeson.eitherDecode <$> BSL.readFile ("dist-newstyle" </> "cache" </> "plan.json")
+    mb_plan <- Aeson.eitherDecode <$> BSL.readFile (dir </> "dist-newstyle" </> "cache" </> "plan.json")
     case mb_plan of
       Left err -> fail err
       Right plan -> return plan
@@ -75,7 +75,7 @@ sortPlan plan =
 
 buildPlan :: FilePath -> Compiler -> CabalPlan -> IO ()
 buildPlan installDir comp cabalPlan = do
-    let sorted = sortPlan cabalPlan
+    let sorted = filter (\pu -> puId pu /= PkgId "dummy-package-0-inplace") $ sortPlan cabalPlan
     putStrLn $ "building:\n" ++ unlines (map (show . puId) sorted)
     let doPkg :: PlanUnit -> IO ()
         doPkg (PreexistingUnit{}) = return ()
@@ -97,7 +97,7 @@ main :: IO ()
 main = do
     putStrLn "Hello, Haskell!"
     plan <- getPlan
-        [ PkgSpec { psName = PkgName "filepath", psConstraints = Nothing, psFlags = mempty }
+        [ PkgSpec { psName = PkgName "lens", psConstraints = Nothing, psFlags = mempty }
         ]
     print plan
     let comp = Compiler "ghc" "ghc-pkg"
