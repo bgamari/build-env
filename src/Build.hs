@@ -115,5 +115,3 @@ main = do
     installDir <- canonicalizePath "install"
     buildPlan installDir comp plan
 
-    --buildPackage "pretty-1.1.3.6" installDir comp mempty
-

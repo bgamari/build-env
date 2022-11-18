@@ -16,8 +16,9 @@ callProcessIn cwd exe args = do
     ExitSuccess <- waitForProcess ph
     return ()
 
+-- | Don't delete temporary directories.
 noDelete :: Bool
-noDelete = True
+noDelete = False
 
 withTempDir :: String -> (FilePath -> IO a) -> IO a
 withTempDir name k
