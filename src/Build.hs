@@ -5,6 +5,7 @@
 module Build where
 
 import Control.Applicative
+import Control.Monad.Fix
 import Data.List
 import Data.Maybe
 import Data.Version
@@ -17,6 +18,7 @@ import qualified Data.Map.Lazy as ML
 import qualified Data.Set as S
 import qualified Data.Text as T
 import qualified Data.Aeson as Aeson
+import Control.Concurrent.Async
 
 import BuildOne
 import CabalPlan
@@ -77,14 +79,22 @@ allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDep
 buildPlan :: FilePath -> Compiler -> CabalPlan -> IO ()
 buildPlan installDir comp cabalPlan = do
     let sorted = filter (\pu -> puId pu /= PkgId "dummy-package-0-inplace") $ sortPlan cabalPlan
-    putStrLn $ "building:\n" ++ unlines (map (show . puId) sorted)
     let doPkg :: PlanUnit -> IO ()
         doPkg (PreexistingUnit{}) = return ()
         doPkg pu@(ConfiguredUnit{}) = withTempDir "source" $ \dir -> do
             putStrLn $ "building " ++ show (puId pu)
             srcDir <- cabalFetch dir (puPkgName pu) (puVersion pu)
             buildPackage srcDir (puComponentName pu) installDir comp (puFlags pu)
-    mapM_ doPkg sorted
+
+    let unitMap :: ML.Map PkgId PlanUnit
+        unitMap = ML.fromList [ (puId pu, pu) | pu <- sorted ]
+    unitAsyncs <- mfix $ \unitAsyncs ->
+        let doPkgAsync :: PlanUnit -> IO ()
+            doPkgAsync pu = do
+                mapM_ (wait . (unitAsyncs M.!)) (allDepends pu)
+                doPkg pu
+         in traverse (async . doPkgAsync) unitMap 
+    mapM_ wait unitAsyncs
 
 cabalFetch :: FilePath -> PkgName -> Version -> IO FilePath
 cabalFetch root pkgName version = do
