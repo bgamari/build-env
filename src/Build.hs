@@ -70,8 +70,9 @@ sortPlan plan =
        | x <- planUnits plan
        ]
 
-    allDepends (PreexistingUnit{puDepends}) = puDepends
-    allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDepends
+allDepends :: PlanUnit -> [PkgId]
+allDepends (PreexistingUnit{puDepends}) = puDepends
+allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDepends
 
 buildPlan :: FilePath -> Compiler -> CabalPlan -> IO ()
 buildPlan installDir comp cabalPlan = do
