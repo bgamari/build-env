@@ -13,7 +13,6 @@ import Control.Monad.Fix
 import Data.List
 import Data.Maybe
 import Data.Version
-import qualified Data.Graph as Graph
 import System.Directory
 import System.FilePath
 import qualified Data.ByteString.Lazy as BSL
@@ -72,16 +71,6 @@ computePlan pkgs = withTempDir "build" $ \dir -> do
         , "  build-depends:"
         ] ++ intercalate "," [ "    " <> T.unpack (unPkgName $ psName ps) | ps <- pkgs ]
 
-sortPlan :: CabalPlan -> [PlanUnit]
-sortPlan plan =
-    map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
-  where
-    fst3 (x,_,_) = x
-    (gr, lookupVertex) = Graph.graphFromEdges'
-       [ (x, puId x, allDepends x)
-       | x <- planUnits plan
-       ]
-
 allDepends :: PlanUnit -> [PkgId]
 allDepends (PreexistingUnit{puDepends}) = puDepends
 allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDepends
@@ -89,7 +78,7 @@ allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDep
 buildPlan :: FilePath -> Compiler -> CabalPlan -> IO ()
 buildPlan installDir0 comp cabalPlan = do
     installDir <- canonicalizePath installDir0
-    let sorted = filter (\pu -> puId pu /= PkgId "dummy-package-0-inplace") $ sortPlan cabalPlan
+    let interestingUnits = filter (\pu -> puId pu /= PkgId "dummy-package-0-inplace") (planUnits cabalPlan)
     let doPkg :: PlanUnit -> IO ()
         doPkg (PreexistingUnit{}) = return ()
         doPkg pu@(ConfiguredUnit{}) = withTempDir "source" $ \dir -> do
@@ -98,7 +87,7 @@ buildPlan installDir0 comp cabalPlan = do
             buildPackage srcDir (puComponentName pu) installDir comp (puFlags pu)
 
     let unitMap :: ML.Map PkgId PlanUnit
-        unitMap = ML.fromList [ (puId pu, pu) | pu <- sorted ]
+        unitMap = ML.fromList [ (puId pu, pu) | pu <- interestingUnits ]
     unitAsyncs <- mfix $ \unitAsyncs ->
         let doPkgAsync :: PlanUnit -> IO ()
             doPkgAsync pu = do
