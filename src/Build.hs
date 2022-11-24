@@ -28,7 +28,7 @@ import BuildOne
 import CabalPlan
 import Utils
 
-data Constraint = Constraint
+data Constraint = Constraint T.Text
 
 data PkgSpec = PkgSpec { psName :: PkgName
                        , psConstraints :: Maybe Constraint
@@ -56,6 +56,12 @@ computePlan pkgs = withTempDir "build" $ \dir -> do
           , "  flags: " <> showFlagSpec (psFlags ps)
           ]
         | ps <- pkgs
+        ] ++ constraints
+
+    constraints = unlines
+        [ unwords ["constraints:", T.unpack (unPkgName (psName ps)), T.unpack constraints]
+        | ps <- pkgs
+        , Just (Constraints constraints) <- psConstraints ps
         ]
 
     cabalContents = unlines
