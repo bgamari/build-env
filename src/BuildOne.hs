@@ -42,11 +42,13 @@ buildPackage comp srcDir installDir plan unit = do
     callProcessIn "." (ghcPath comp) setupArgs
     let configureArgs = [ "--prefix", installDir
                         , "--flags=" ++ showFlagSpec (puFlags unit)
+                        , "--cid=" ++ Text.unpack (unPkgId $ Configured.puId unit)
                         , "--package-db=" ++ pkgDbDir
                         , "--exact-configuration"
                         ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
                         ++ [Text.unpack $ unComponentName $ puComponentName unit]
         setupExe = srcDir </> "Setup" <.> exe
+    putStrLn $ "configure arguments: " ++ show configureArgs
     callProcessIn srcDir setupExe $ ["configure"] ++ configureArgs
     callProcessIn srcDir setupExe ["build"]
     callProcessIn srcDir setupExe ["copy"]
