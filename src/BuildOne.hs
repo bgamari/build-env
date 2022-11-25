@@ -25,6 +25,7 @@ import qualified CabalPlan as Configured
 
 --------------------------------------------------------------------------------
 
+-- | Build a single package and register it in the package database.
 buildPackage :: Compiler -- ^ compiler
              -> FilePath -- ^ source directory
              -> FilePath -- ^ installation prefix
@@ -67,6 +68,8 @@ buildPackage comp srcDir installDir plan unit = do
 packageId :: PkgId -> String
 packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
 
+-- | Create the text of a @--dependency=PKG:COMP:PKGID@ flag to specify
+-- the package ID of a dependency to the configure script.
 dependency :: CabalPlan -> ConfiguredUnit -> PkgId -> String
 dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
   where
@@ -82,7 +85,8 @@ dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
     mkDependency ( PU_Configured ( ConfiguredUnit { puComponentName = ComponentName comp } ) )
       = Text.unpack comp ++ "=" ++ Text.unpack (unPkgId pkgId)
 
-
+-- | Find the @Setup.hs@ file to use, or create one using @main = defaultMain@
+-- if none exist.
 findSetupHs :: FilePath -> IO FilePath
 findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
   where

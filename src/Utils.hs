@@ -23,6 +23,9 @@ import System.IO.Temp
 
 --------------------------------------------------------------------------------
 
+-- | Run a command inside the specified working directory.
+--
+-- Crashes if the spawned command returns with nonzero exit code.
 callProcessIn :: HasCallStack
               => FilePath -- ^ working directory
               -> FilePath -- ^ executable
@@ -40,9 +43,11 @@ callProcessIn cwd prog args = do
         error ("command failed with exit code " ++ show i ++ ":\n"
               ++ "  > " ++ prog ++ argsStr )
 
--- | Don't delete temporary directories.
+-- | Set this to 'True' to prevent deletion of temporary directories.
+--
+-- Useful for debugging this library.
 noDelete :: Bool
-noDelete = True -- for debugging... otherwise False
+noDelete = False
 
 withTempDir :: String -> (FilePath -> IO a) -> IO a
 withTempDir name k
@@ -51,6 +56,7 @@ withTempDir name k
        createTempDirectory root name >>= k
   | otherwise = withSystemTempDirectory name k
 
+-- | OS-dependent executable file extension.
 exe :: String
 exe =
 #if defined(mingw32_HOST_OS)

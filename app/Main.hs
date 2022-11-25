@@ -30,17 +30,17 @@ main = do
         computePlanFromInputs verbosity cabal planModeInputs
       verboseMsg verbosity $ "Writing build plan to " ++ planOutput
       BSL.writeFile planOutput planBinary
-    FetchMode ( FetchInputs { fetchDir, fetchInputPlan } ) -> do
+    FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) -> do
       plan <- getPlan verbosity cabal fetchInputPlan
       doFetch verbosity cabal fetchDir plan
-    BuildMode ( Build { buildFetchInputs = FetchInputs { fetchDir, fetchInputPlan }
+    BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildOutputDir } ) -> do
       plan <- getPlan verbosity cabal fetchInputPlan
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
       verboseMsg verbosity "Building and registering packages"
-      buildPlan compiler buildStrategy fetchDir buildOutputDir plan
+      buildPlan compiler fetchDir buildOutputDir buildStrategy plan
 
 computePlanFromInputs :: Verbosity -> Cabal -> PlanInputs -> IO CabalPlanBinary
 computePlanFromInputs verbosity cabal

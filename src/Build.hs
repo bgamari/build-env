@@ -20,7 +20,7 @@ import Data.List
 import Data.Maybe
   ( mapMaybe, maybeToList )
 import Data.Version
-  ( Version, showVersion )
+  ( Version )
 
 -- aeson
 import qualified Data.Aeson as Aeson
@@ -66,6 +66,11 @@ import Utils
 
 --------------------------------------------------------------------------------
 
+-- | Query @cabal@ to obtain a build plan for the given packages,
+-- by reading the output @plan.json@ of a @cabal build --dry-run@ invocation.
+--
+-- Use 'parsePlanBinary' to turn the returned 'CabalPlanBinary' into
+-- a 'CabalPlan'.
 computePlan :: Cabal
             -> AllowNewer
             -> PkgSpecs -- ^ pins: packages which we want to constrain at
@@ -126,16 +131,18 @@ computePlan cabal (AllowNewer allowNewer) pins pkgs =
              [ "    " <> Text.unpack (unPkgName nm)
              | nm <- Map.keys pkgs ]
 
+-- | Decode a 'CabalPlanBinary' into a 'CabalPlan'.
 parsePlanBinary :: CabalPlanBinary -> CabalPlan
 parsePlanBinary (CabalPlanBinary pb) =
   case Aeson.eitherDecode pb of
     Left  err  -> error ("parsePlan: failed to parse plan JSON\n" ++ err)
     Right plan -> plan
 
-allDepends :: ConfiguredUnit -> [PkgId]
-allDepends (ConfiguredUnit{puDepends, puSetupDepends}) = puDepends ++ puSetupDepends
-
-fetchPlan :: Cabal -> FilePath -> CabalPlan -> IO ()
+-- | Fetch the sources of a 'CabalPlan'.
+fetchPlan :: Cabal
+          -> FilePath -- ^ directory for the sources
+          -> CabalPlan
+          -> IO ()
 fetchPlan cabal fetchDir0 cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
     createDirectoryIfMissing True fetchDir
@@ -149,14 +156,13 @@ fetchPlan cabal fetchDir0 cabalPlan = do
                            ; _ -> Nothing })
          $ planUnits cabalPlan
 
+-- | Call @cabal unpack@ to fetch a single package from Hackage.
 cabalFetch :: Cabal -> FilePath -> PkgName -> Version -> IO ()
 cabalFetch cabal root nm ver = do
     callProcessIn root (cabalPath cabal)
       [ "unpack", pkgNameVersion nm ver ]
 
-pkgNameVersion :: PkgName -> Version -> String
-pkgNameVersion (PkgName n) v = Text.unpack n <> "-" <> showVersion v
-
+-- | Sort the units in a 'CabalPlan' in dependency order.
 sortPlan :: CabalPlan -> [ConfiguredUnit]
 sortPlan plan =
     map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
@@ -168,8 +174,15 @@ sortPlan plan =
        | PU_Configured pu@(ConfiguredUnit { puId }) <- planUnits plan
        ]
 
-buildPlan :: Compiler -> BuildStrategy -> FilePath -> FilePath -> CabalPlan -> IO ()
-buildPlan comp buildStrat fetchDir0 installDir0 cabalPlan = do
+-- | Build a 'CabalPlan'. This will install all the packages in the plan
+-- and register them into a local package database.
+buildPlan :: Compiler
+          -> FilePath  -- ^ fetched sources directory (input)
+          -> FilePath  -- ^ installation directory (output)
+          -> BuildStrategy
+          -> CabalPlan -- ^ the build plan to execute
+          -> IO ()
+buildPlan comp  fetchDir0 installDir0 buildStrat cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
     installDir <- canonicalizePath installDir0
     createDirectoryIfMissing True installDir
@@ -226,4 +239,4 @@ test = do
     let plan = parsePlanBinary pb
     print plan
     --fetchPlan cabal fetchDir plan
-    buildPlan compiler TopoSort fetchDir installDir plan
+    buildPlan compiler fetchDir installDir TopoSort plan

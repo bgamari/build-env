@@ -8,7 +8,7 @@ module CabalPlan where
 import Data.Maybe
   ( fromMaybe, mapMaybe )
 import Data.Version
-  ( Version )
+  ( Version, showVersion )
 
 -- aeson
 import Data.Aeson
@@ -53,6 +53,10 @@ newtype PkgName = PkgName { unPkgName :: Text }
     deriving stock   Show
     deriving newtype (Eq, Ord, FromJSON)
 
+-- | The name + version string of a package.
+pkgNameVersion :: PkgName -> Version -> String
+pkgNameVersion (PkgName n) v = Text.unpack n <> "-" <> showVersion v
+
 newtype FlagSpec = FlagSpec (Strict.Map Text Bool)
     deriving stock   Show
     deriving newtype (Eq, Ord, Semigroup, Monoid, FromJSON)
@@ -84,6 +88,11 @@ configuredUnitMaybe (PU_Preexisting {}) = Nothing
 planUnitId :: PlanUnit -> PkgId
 planUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
 planUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
+
+-- | All the dependencies of a unit: @depends@ and @setup-depends@.
+allDepends :: ConfiguredUnit -> [PkgId]
+allDepends (ConfiguredUnit{puDepends, puSetupDepends}) =
+  puDepends ++ puSetupDepends
 
 data PreexistingUnit
   = PreexistingUnit

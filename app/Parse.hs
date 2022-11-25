@@ -20,6 +20,7 @@ import Options
 
 --------------------------------------------------------------------------------
 
+-- | Run the command-line options parser.
 runOptionsParser :: IO Opts
 runOptionsParser =
   customExecParser ( prefs showHelpOnEmpty ) $
@@ -27,6 +28,7 @@ runOptionsParser =
       (  fullDesc
       <> header "build-env - compute, fetch and build cabal build plans" )
 
+-- | The command-line options parser for the 'build-env' executable.
 options :: Parser Opts
 options = do
   mode      <- optMode
@@ -35,22 +37,25 @@ options = do
   verbosity <- optVerbosity
   return $ Opts { compiler, cabal, mode, verbosity }
 
-
+-- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
 optCompiler =
     Compiler
       <$> option str (long "ghc" <> value "ghc" <> help "'ghc' executable path" <> metavar "GHC")
       <*> option str (long "ghc-pkg" <> value "ghc-pkg" <> help "'ghc-pkg' executable path" <> metavar "GHC-PKG")
 
+-- | Parse @cabal@ path.
 optCabal :: Parser Cabal
 optCabal =
   Cabal <$> option str (long "cabal" <> value "cabal" <> help "'cabal' executable path" <> metavar "CABAL")
 
+-- | Parse verbosity.
 optVerbosity :: Parser Verbosity
 optVerbosity =
   Verbosity <$>
     flag 0 1 ( long "verbose" <> short 'v' <> help "Enable verbose mode" )
 
+-- | Parse the mode in which to run the application: plan, fetch, build.
 optMode :: Parser Mode
 optMode =
   hsubparser . mconcat $
@@ -58,7 +63,7 @@ optMode =
         info ( PlanMode  <$> planInputs "Build plan seed packages" <*> optOutput )
         ( progDesc "Compute a build plan" )
     , command "fetch" $
-        info ( FetchMode <$> fetchInputs "Seed packages to fetch" )
+        info ( FetchMode <$> fetchDescription "Seed packages to fetch" )
         ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
@@ -72,6 +77,9 @@ optMode =
 -- | A 'String' that's only used to set a parser description.
 type OptionDescString = String
 
+-- | Obtain a collection of seed packages.
+--
+-- Might be for computing a build plan, fetching sources, or building packages.
 planInputs :: OptionDescString -> Parser PlanInputs
 planInputs pkgsParserDesc = do
 
@@ -94,6 +102,8 @@ planInputs pkgsParserDesc = do
     pkgSpec :: ReadM (PkgName, PkgSpec)
     pkgSpec = (,) <$> (PkgName <$> str) <*> (PkgSpec Nothing <$> pure mempty)
 
+-- | Parse how we will obtain a build plan: by computing it, or by reading
+-- from a @plan.json@ on disk?
 plan :: OptionDescString -> Parser Plan
 plan pkgsParserDesc = do
   inputs     <- planInputs pkgsParserDesc
@@ -111,26 +121,29 @@ plan pkgsParserDesc = do
       option (fmap Just str)
         (short 'p' <> long "plan" <> value Nothing <> help "Path of a plan.json to use (overrides PKGs)" )
 
-fetchInputs :: OptionDescString -> Parser FetchInputs
-fetchInputs pkgsParserDesc = do
+-- | Parse information about fetched sources: in which directory they belong,
+-- and what build plan they correspond to.
+fetchDescription :: OptionDescString -> Parser FetchDescription
+fetchDescription pkgsParserDesc = do
   fetchInputPlan <- plan pkgsParserDesc
   fetchDir       <- optFetchDir
-  return $ FetchInputs { fetchDir, fetchInputPlan }
+  return $ FetchDescription { fetchDir, fetchInputPlan }
 
   where
     optFetchDir :: Parser FilePath
     optFetchDir =
       option str ( short 'f' <> long "fetch-dir" <> help "Directory for fetched sources" )
 
+-- | Parse the options for the @build@ command.
 build :: Parser Build
 build = do
 
-  buildFetchInputs <- fetchInputs "Packages to build"
-  buildFetch       <- optFetch
-  buildStrategy    <- optStrategy
-  buildOutputDir   <- optOutputDir
+  buildFetchDescr <- fetchDescription "Packages to build"
+  buildFetch      <- optFetch
+  buildStrategy   <- optStrategy
+  buildOutputDir  <- optOutputDir
 
-  return $ Build { buildFetch, buildFetchInputs
+  return $ Build { buildFetch, buildFetchDescr
                  , buildStrategy, buildOutputDir }
 
   where

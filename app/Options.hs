@@ -8,6 +8,7 @@ import Config
 
 --------------------------------------------------------------------------------
 
+-- | The command-line options for the @build-env@ application.
 data Opts = Opts { compiler  :: Compiler
                  , cabal     :: Cabal
                  , mode      :: Mode
@@ -15,6 +16,7 @@ data Opts = Opts { compiler  :: Compiler
                  }
   deriving stock Show
 
+-- | Verbosity level for the @build-env@ application.
 newtype Verbosity = Verbosity Int
   deriving newtype (Eq, Ord)
   deriving stock   Show
@@ -32,7 +34,7 @@ data Mode
        -- ^ Where to output the @plan.json@ file.
      }
   -- | Fetch sources from a build plan.
-  | FetchMode FetchInputs
+  | FetchMode FetchDescription
   -- | Build and register packages from fetched sources.
   | BuildMode Build
   deriving stock Show
@@ -45,10 +47,14 @@ data PlanInputs
     , planAllowNewer :: AllowNewer }
   deriving stock Show
 
-data FetchInputs
-  = FetchInputs
+-- | Information about fetched sources: in which directory they belong,
+-- and what build plan they correspond to.
+data FetchDescription
+  = FetchDescription
     { fetchDir       :: FilePath
+      -- ^ Directory for fetched sources.
     , fetchInputPlan :: Plan
+      -- ^ The build plan corresponding to the fetched sources.
     }
   deriving stock Show
 
@@ -72,15 +78,15 @@ data Fetch
 
 data Build
   = Build
-    { buildFetch :: Fetch
+    { buildFetch      :: Fetch
       -- ^ How to obtain the fetched sources,
       -- including the build plan.
-    , buildFetchInputs :: FetchInputs
+    , buildFetchDescr :: FetchDescription
       -- ^ Where the fetch sources are located,
       -- and the build plan they correspond to.
-    , buildStrategy  :: BuildStrategy
+    , buildStrategy   :: BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
-    , buildOutputDir :: FilePath
+    , buildOutputDir  :: FilePath
       -- ^ The output directory for the build.
     }
   deriving stock Show
