@@ -8,9 +8,6 @@ import Control.Monad
 import qualified Data.ByteString.Lazy as BSL
   ( readFile, writeFile )
 
--- optparse-applicative
-import Options.Applicative
-
 -- build-env
 import Build
   ( buildPlan, computePlan, fetchPlan, parsePlanBinary )
@@ -20,16 +17,13 @@ import Config
   ( Cabal )
 import Options
 import Parse
-  ( options )
+  ( runOptionsParser )
 
 --------------------------------------------------------------------------------
 
 main :: IO ()
 main = do
-  Opts { compiler, cabal, mode, verbosity }
-    <- execParser $ info (helper <*> options)
-                    (  fullDesc
-                    <> header "build-env - compute, fetch and build cabal build plans" )
+  Opts { compiler, cabal, mode, verbosity } <- runOptionsParser
   case mode of
     PlanMode { planModeInputs, planOutput } -> do
       CabalPlanBinary planBinary <-

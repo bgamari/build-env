@@ -1,7 +1,7 @@
 
 {-# LANGUAGE ApplicativeDo #-}
 
-module Parse ( options ) where
+module Parse ( options, runOptionsParser ) where
 
 -- base
 import Data.Bool ( bool )
@@ -19,6 +19,13 @@ import Config
 import Options
 
 --------------------------------------------------------------------------------
+
+runOptionsParser :: IO Opts
+runOptionsParser =
+  customExecParser ( prefs showHelpOnEmpty ) $
+    info (helper <*> options)
+      (  fullDesc
+      <> header "build-env - compute, fetch and build cabal build plans" )
 
 options :: Parser Opts
 options = do
@@ -48,23 +55,25 @@ optMode :: Parser Mode
 optMode =
   hsubparser . mconcat $
     [ command "plan"  $
-        info ( PlanMode  <$> planInputs <*> optOutput )
+        info ( PlanMode  <$> planInputs "Build plan seed packages" <*> optOutput )
         ( progDesc "Compute a build plan" )
     , command "fetch" $
-        info ( FetchMode <$> fetchInputs )
-        ( progDesc "Fetch package sources" )
+        info ( FetchMode <$> fetchInputs "Seed packages to fetch" )
+        ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
-        ( progDesc "Build and register packages" )
+        ( fullDesc <> progDesc "Build and register packages" )
     ]
   where
     optOutput :: Parser FilePath
     optOutput =
-      option str ( short 'o' <> long "output" <> help "output filepath for plan.json" )
+      option str ( short 'o' <> long "output" <> help "Output 'plan.json' filepath" )
 
+-- | A 'String' that's only used to set a parser description.
+type OptionDescString = String
 
-planInputs :: Parser PlanInputs
-planInputs = do
+planInputs :: OptionDescString -> Parser PlanInputs
+planInputs pkgsParserDesc = do
 
   let
     -- TODO: not allowing pinned packages or allow-newer yet.
@@ -80,15 +89,15 @@ planInputs = do
 
   where
     pkgs :: Parser PkgSpecs
-    pkgs = M.fromList <$> many (argument pkgSpec (help "package" <> metavar "PKG"))
+    pkgs = M.fromList <$> many (argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsParserDesc))
 
     pkgSpec :: ReadM (PkgName, PkgSpec)
     pkgSpec = (,) <$> (PkgName <$> str) <*> (PkgSpec Nothing <$> pure mempty)
 
-plan :: Parser Plan
-plan = do
+plan :: OptionDescString -> Parser Plan
+plan pkgsParserDesc = do
+  inputs     <- planInputs pkgsParserDesc
   mbPlanPath <- optPlanPath
-  inputs     <- planInputs
   return $
     case mbPlanPath of
       -- Passing the path to a plan.json overrides everything else.
@@ -100,24 +109,24 @@ plan = do
     optPlanPath :: Parser (Maybe FilePath)
     optPlanPath =
       option (fmap Just str)
-        (short 'p' <> long "plan" <> value Nothing <> help "Path of a plan.json to use" )
+        (short 'p' <> long "plan" <> value Nothing <> help "Path of a plan.json to use (overrides PKGs)" )
 
-fetchInputs :: Parser FetchInputs
-fetchInputs = do
+fetchInputs :: OptionDescString -> Parser FetchInputs
+fetchInputs pkgsParserDesc = do
+  fetchInputPlan <- plan pkgsParserDesc
   fetchDir       <- optFetchDir
-  fetchInputPlan <- plan
   return $ FetchInputs { fetchDir, fetchInputPlan }
 
   where
     optFetchDir :: Parser FilePath
     optFetchDir =
-      option str ( short 'f' <> long "fetch-dir" <> help "Fetch directory" )
+      option str ( short 'f' <> long "fetch-dir" <> help "Directory for fetched sources" )
 
 build :: Parser Build
 build = do
 
+  buildFetchInputs <- fetchInputs "Packages to build"
   buildFetch       <- optFetch
-  buildFetchInputs <- fetchInputs
   buildStrategy    <- optStrategy
   buildOutputDir   <- optOutputDir
 
@@ -129,12 +138,12 @@ build = do
     optStrategy :: Parser BuildStrategy
     optStrategy =
       bool Async TopoSort <$>
-        switch ( long "no-async" <> help "Disable asynchronous package building\n  (useful for debugging)" )
+        switch ( long "no-async" <> help "Disable asynchronous package building (useful for debugging)" )
 
     optFetch :: Parser Fetch
     optFetch =
-      bool Prefetched Fetch <$>
-        switch ( long "fetch" <> help "Fetch packages from Hackage" )
+      bool Fetch Prefetched <$>
+        switch ( long "prefetched" <> help "Use prefetched sources instead of fetching from Hackage")
 
     optOutputDir :: Parser FilePath
     optOutputDir =

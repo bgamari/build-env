@@ -79,7 +79,7 @@ dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
     mkDependency :: PlanUnit -> String
     mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
       = Text.unpack nm ++ "=" ++ Text.unpack (unPkgId pkgId)
-    mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName nm, puComponentName = ComponentName comp } ) )
+    mkDependency ( PU_Configured ( ConfiguredUnit { puComponentName = ComponentName comp } ) )
       = Text.unpack comp ++ "=" ++ Text.unpack (unPkgId pkgId)
 
 
