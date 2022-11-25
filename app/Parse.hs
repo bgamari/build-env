@@ -80,7 +80,7 @@ planInputs = do
 
   where
     pkgs :: Parser PkgSpecs
-    pkgs = M.fromList <$> many (argument pkgSpec (help "package"))
+    pkgs = M.fromList <$> many (argument pkgSpec (help "package" <> metavar "PKG"))
 
     pkgSpec :: ReadM (PkgName, PkgSpec)
     pkgSpec = (,) <$> (PkgName <$> str) <*> (PkgSpec Nothing <$> pure mempty)
