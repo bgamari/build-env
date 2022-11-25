@@ -1,73 +1,93 @@
-module BuildOne
-    ( Compiler(..)
-    , buildPackage
-    ) where
+module BuildOne ( buildPackage ) where
 
-import Control.Applicative
-import Data.List
-import Data.Maybe
-import Data.Version
+-- base
+import Control.Monad ( guard )
+
+-- directory
 import System.Directory
-import System.Exit
+
+-- filepath
 import System.FilePath
-import System.Process
-import qualified Data.ByteString.Lazy as BSL
-import qualified Data.Map.Strict as M
-import qualified Data.Text as T
-import qualified Data.Aeson as Aeson
+  ( (</>), (<.>) )
 
+-- text
+import qualified Data.Text as Text
+  ( unpack )
+
+-- build-env
+import Config
+  ( Compiler(..) )
 import Utils
+  ( callProcessIn, exe )
 import CabalPlan
+import qualified CabalPlan as Configured
+  ( ConfiguredUnit(..) )
 
-data Compiler = Compiler { ghcPath :: FilePath
-                         , ghcPkgPath :: FilePath
-                         }
+--------------------------------------------------------------------------------
 
-buildPackage :: FilePath -- ^ source directory
-             -> ComponentName
+buildPackage :: Compiler -- ^ compiler
+             -> FilePath -- ^ source directory
              -> FilePath -- ^ installation prefix
-             -> Compiler -- ^ compiler
-             -> FlagSpec -- ^ flags
+             -> CabalPlan
+             -> ConfiguredUnit
              -> IO ()
-buildPackage srcDir component installDir comp flags = withTempDir "build" $ \dir -> do
+buildPackage comp srcDir installDir plan unit = do
     setupHs <- findSetupHs srcDir
     let pkgDbDir = installDir </> "package.conf"
     createDirectoryIfMissing True pkgDbDir
-    -- TODO: Handle setup-depends
-    callProcessIn "." (ghcPath comp) [setupHs, "-o", srcDir </> "Setup"]
+    let setupArgs = [ setupHs, "-o"
+                    , srcDir </> "Setup"
+                    , "-package-db=" ++ pkgDbDir
+                    ] ++ (map packageId $ puSetupDepends unit)
+    callProcessIn "." (ghcPath comp) setupArgs
     let configureArgs = [ "--prefix", installDir
-                        , "--flags=" ++ showFlagSpec flags
+                        , "--flags=" ++ showFlagSpec (puFlags unit)
                         , "--package-db=" ++ pkgDbDir
-                        ] ++ [T.unpack $ unComponentName component]
-    callProcessIn srcDir "./Setup" $ ["configure"] ++ configureArgs
-    callProcessIn srcDir "./Setup" ["build"]
-    callProcessIn srcDir "./Setup" ["copy"]
-    let pkgReg = "pkg-reg.conf"
-    callProcessIn srcDir "./Setup" ["register", "--gen-pkg-config=" ++ pkgReg]
-    is_dir <- doesDirectoryExist (srcDir </> pkgReg)
-    regFiles <- if is_dir
-        then map ((srcDir </> pkgReg) </>) <$> listDirectory (srcDir </> pkgReg)
-        else return [srcDir </> pkgReg]
-    let register regFile = 
-          callProcessIn srcDir (ghcPkgPath comp) [ "register", "--package-db", pkgDbDir, regFile]
+                        , "--exact-configuration"
+                        ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
+                        ++ [Text.unpack $ unComponentName $ puComponentName unit]
+        setupExe = srcDir </> "Setup" <.> exe
+    callProcessIn srcDir setupExe $ ["configure"] ++ configureArgs
+    callProcessIn srcDir setupExe ["build"]
+    callProcessIn srcDir setupExe ["copy"]
+    let pkgRegsFile = "pkg-reg.conf"
+        pkgRegDir = srcDir </> pkgRegsFile
+    callProcessIn srcDir setupExe ["register", "--gen-pkg-config=" ++ pkgRegsFile]
+    is_dir <- doesDirectoryExist pkgRegDir
+    regFiles <-
+        if is_dir
+        then map (pkgRegDir </>) <$> listDirectory pkgRegDir
+        else return [pkgRegDir]
+    let register regFile =
+          callProcessIn srcDir (ghcPkgPath comp) ["register", "--package-db", pkgDbDir, regFile]
     mapM_ register regFiles
 
-oneOf :: [IO (Maybe a)] -> IO (Maybe a)
-oneOf = foldr f (return Nothing)
+packageId :: PkgId -> String
+packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
+
+dependency :: CabalPlan -> ConfiguredUnit -> PkgId -> String
+dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
   where
-    f k rest = do
-        r <- k
-        case r of
-          Nothing -> rest
-          Just x -> return $ Just x
+    pu :: PlanUnit
+    pu = case mapMaybePlanUnits ( \ u -> do { guard ( pkgId == planUnitId u) ; return u }) fullPlan of
+          [] -> error $ "buildPackage: can't find dependency in build plan\n\
+                        \unit:" ++ show (Configured.puPkgName unit) ++ "\n\
+                        \dependency:" ++ show pkgId
+          cu:_ -> cu
+    mkDependency :: PlanUnit -> String
+    mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
+      = Text.unpack nm ++ "=" ++ Text.unpack (unPkgId pkgId)
+    mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName nm, puComponentName = ComponentName comp } ) )
+      = Text.unpack comp ++ "=" ++ Text.unpack (unPkgId pkgId)
+
 
 findSetupHs :: FilePath -> IO FilePath
-findSetupHs root = fromMaybe undefined <$> oneOf [ try "Setup.hs", try "Setup.lhs", populate ]
+findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
   where
-    populate = do
+    useDefaultSetupHs = do
         let path = root </> "Setup.hs"
         writeFile path defaultSetupHs
-        return $ Just path
+        return path
 
     try fname = do
         let path = root </> fname
@@ -79,3 +99,9 @@ findSetupHs root = fromMaybe undefined <$> oneOf [ try "Setup.hs", try "Setup.lh
         , "main = defaultMain"
         ]
 
+    trySetupsOrUseDefault [] = useDefaultSetupHs
+    trySetupsOrUseDefault (setupPath:setups) = do
+      res <- try setupPath
+      case res of
+        Nothing    -> trySetupsOrUseDefault setups
+        Just setup -> return setup
