@@ -7,18 +7,30 @@ by `cabal-install`'s solver) into a free-standing package database.
 
 ```
 $ build-env plan -o plan.json lens
-$ build-env fetch -p plan.json sources
-$ build-env build -p plan.json -f sources -o install
+$ build-env fetch -p plan.json -f sources
+$ build-env build --prefetched -p plan.json -f sources -o install
 $ ls install/package.conf/lens*
-install/package.conf/lens-5.2-IBRhTnrnPbqHKoyIQt5fcl.conf
+install/package.conf/lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401.conf
 $ ghc-pkg --package-db=install/package.conf field lens id
-id: lens-5.2-IBRhTnrnPbqHKoyIQt5fcl
-$ ghci -package-db install/package.conf/ -package-id lens-5.2-IBRhTnrnPbqHKoyIQt5fcl
+id: lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401
+$ ghci -package-db install/package.conf/ -package-id lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401
 GHCi, version 9.0.2: https://www.haskell.org/ghc/  :? for help
 λ> :ty Control.Lens.Lens
 Control.Lens.Lens
   :: Control.Lens.Type.Lens s t a b
      -> Control.Lens.Reified.ReifiedLens s t a b
+```
+
+In the above example, the `plan` command generates a `plan.json` file, which
+is then used by the `fetch` and `build` commands. This allows one to fetch
+packages, copy the sources and the `plan.json` file, and build the plan in a
+different location.
+
+If you don't need this functionality, you can build the packages using
+the `build` command alone:
+
+```
+$ build-env build lens -f sources -o install
 ```
 
 ## Todo
