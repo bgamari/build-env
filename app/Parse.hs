@@ -4,14 +4,21 @@
 module Parse ( options, runOptionsParser ) where
 
 -- base
-import Data.Bool ( bool )
+import Data.Bool
+  ( bool )
 
 -- containers
 import qualified Data.Map.Strict as M
-  ( empty, fromList )
+  ( fromList )
 
 -- optparse-applicative
 import Options.Applicative
+
+-- text
+import Data.Text
+  ( Text )
+import qualified Data.Text as Text
+  ( pack )
 
 -- build-env
 import CabalPlan
@@ -24,7 +31,7 @@ import Options
 runOptionsParser :: IO Opts
 runOptionsParser =
   customExecParser ( prefs showHelpOnEmpty ) $
-    info (helper <*> options)
+    info ( helper <*> options )
       (  fullDesc
       <> header "build-env - compute, fetch and build cabal build plans" )
 
@@ -53,17 +60,22 @@ optCabal =
 optVerbosity :: Parser Verbosity
 optVerbosity =
   Verbosity <$>
-    flag 0 1 ( long "verbose" <> short 'v' <> help "Enable verbose mode" )
+    option auto
+      (  long "verbosity"
+      <> short 'v'
+      <> help "Verbosity"
+      <> metavar "INT"
+      <> value 1 )
 
 -- | Parse the mode in which to run the application: plan, fetch, build.
 optMode :: Parser Mode
 optMode =
   hsubparser . mconcat $
     [ command "plan"  $
-        info ( PlanMode  <$> planInputs "Build plan seed packages" <*> optOutput )
-        ( progDesc "Compute a build plan" )
+        info ( PlanMode  <$> planInputs Planning <*> optOutput )
+        ( progDesc "Compute a build plan from a collection of seeds" )
     , command "fetch" $
-        info ( FetchMode <$> fetchDescription "Seed packages to fetch" )
+        info ( FetchMode <$> fetchDescription Fetching )
         ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
@@ -72,73 +84,154 @@ optMode =
   where
     optOutput :: Parser FilePath
     optOutput =
-      option str ( short 'o' <> long "output" <> help "Output 'plan.json' filepath" )
+      option str ( short 'p' <> long "plan" <> help "Output 'plan.json' file" <> metavar "OUTFILE" )
 
--- | A 'String' that's only used to set a parser description.
-type OptionDescString = String
+
+-- | Description of which mode we are in.
+--
+-- Used to generate help-text that is specific to a certain mode.
+data ModeDescription
+  = Planning
+  | Fetching
+  | Building
+  deriving stock Show
+
+modeDescription :: ModeDescription -> String
+modeDescription modeDesc =
+  case modeDesc of
+    Planning -> "Build plan"
+    Fetching -> "Fetch plan"
+    Building -> "Build"
 
 -- | Obtain a collection of seed packages.
 --
 -- Might be for computing a build plan, fetching sources, or building packages.
-planInputs :: OptionDescString -> Parser PlanInputs
-planInputs pkgsParserDesc = do
+planInputs :: ModeDescription -> Parser PlanInputs
+planInputs modeDesc = do
 
-  let
-    -- TODO: not allowing pinned packages or allow-newer yet.
-    -- It would be good to allow these to be read from files
-    -- instead of passed in the command line.
-    planPins :: PkgSpecs
-    planPins = M.empty
-    planAllowNewer :: AllowNewer
-    planAllowNewer = AllowNewer []
-  planPkgs <- pkgs
+  planPkgs <- dependencies modeDesc
+  planPins <- optional (freeze modeDesc)
+  planAllowNewer <- allowNewer
 
   return $ PlanInputs { planPins, planPkgs, planAllowNewer }
 
+-- | Parse a list of pinned packages from a 'cabal.config' freeze file.
+freeze :: ModeDescription -> Parser PackageData
+freeze modeDesc = FromFile <$> freezeFile
   where
+    freezeFile :: Parser FilePath
+    freezeFile = option str ( long "freeze" <> help helpStr <> metavar "INFILE" )
+
+    helpStr :: String
+    helpStr = modeDescription modeDesc <> " 'cabal.config' freeze file"
+
+-- | Parse @allow-newer@ options.
+allowNewer :: Parser AllowNewer
+allowNewer =
+  option readAllowNewer ( long "allow-newer" <> help "Allow-newer specification"
+                                             <> value (AllowNewer [])
+                                             <> metavar "PKG1:PKG2" )
+  where
+    readAllowNewer :: ReadM AllowNewer
+    readAllowNewer = do
+      allowNewerString <- str
+      case parseAllowNewer allowNewerString of
+        Just an -> return an
+        Nothing -> readerError $
+                     "Invalid allow-newer specification.\n\
+                     \Should be of the form: pkg1:pkg2,*:base,..."
+
+    parseAllowNewer :: String -> Maybe AllowNewer
+    parseAllowNewer = fmap AllowNewer . traverse oneAllowNewer
+                    . splitOn ','
+
+    oneAllowNewer :: String -> Maybe (Text, Text)
+    oneAllowNewer s
+      | (Text.pack -> a, Text.pack . drop 1 -> b) <- break (== ':') s
+      , a == "*" || validPackageName a
+      , b == "*" || validPackageName b
+      = Just (a,b)
+      | otherwise
+      = Nothing
+
+-- | Utility list 'splitOn' function.
+splitOn :: Char -> String -> [String]
+splitOn c = go
+  where
+    go "" = []
+    go s
+      | (a,as) <- break (== c) s
+      = a : go (drop 1 as)
+
+-- | Parse a collection of package dependencies, either from a seed file
+-- or from explicit command-line arguments.
+dependencies :: ModeDescription -> Parser PackageData
+dependencies modeDesc
+  =   ( FromFile <$> seeds )
+  <|> ( Explicit <$> pkgs )
+
+  where
+
+    seeds :: Parser FilePath
+    seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
+
     pkgs :: Parser PkgSpecs
-    pkgs = M.fromList <$> many (argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsParserDesc))
+    pkgs = M.fromList <$>
+           some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
 
     pkgSpec :: ReadM (PkgName, PkgSpec)
-    pkgSpec = (,) <$> (PkgName <$> str) <*> (PkgSpec Nothing <$> pure mempty)
+    pkgSpec = (,) <$> (PkgName <$> str)
+                  <*> (PkgSpec Nothing <$> pure mempty)
+                    -- TODO: flags & constraints not yet supported by
+                    -- the command-line interface; use a SEED file instead.
+
+    pkgsHelp, seedsHelp :: String
+    (pkgsHelp, seedsHelp) = (what <> " seed packages", what <> " seed file")
+      where
+        what = modeDescription modeDesc
 
 -- | Parse how we will obtain a build plan: by computing it, or by reading
 -- from a @plan.json@ on disk?
-plan :: OptionDescString -> Parser Plan
-plan pkgsParserDesc = do
-  inputs     <- planInputs pkgsParserDesc
-  mbPlanPath <- optPlanPath
-  return $
-    case mbPlanPath of
-      -- Passing the path to a plan.json overrides everything else.
-      -- TODO: emit a warning/error instead of silently discarding.
-      Just planJSONPath -> UsePlan { planJSONPath }
-      Nothing           -> ComputePlan inputs
+plan :: ModeDescription -> Parser Plan
+plan modeDesc = ( UsePlan <$> optPlanPath )
+            <|> ( ComputePlan <$> planInputs modeDesc )
 
   where
-    optPlanPath :: Parser (Maybe FilePath)
+    optPlanPath :: Parser FilePath
     optPlanPath =
-      option (fmap Just str)
-        (short 'p' <> long "plan" <> value Nothing <> help "Path of a plan.json to use (overrides PKGs)" )
+      option str
+        (  short 'p'
+        <> long "plan"
+        <> help "Input 'plan.json' file"
+        <> metavar "INFILE" )
 
 -- | Parse information about fetched sources: in which directory they belong,
 -- and what build plan they correspond to.
-fetchDescription :: OptionDescString -> Parser FetchDescription
-fetchDescription pkgsParserDesc = do
-  fetchInputPlan <- plan pkgsParserDesc
+fetchDescription :: ModeDescription -> Parser FetchDescription
+fetchDescription modeDesc = do
+  fetchInputPlan <- plan modeDesc
   fetchDir       <- optFetchDir
   return $ FetchDescription { fetchDir, fetchInputPlan }
 
   where
     optFetchDir :: Parser FilePath
     optFetchDir =
-      option str ( short 'f' <> long "fetch-dir" <> help "Directory for fetched sources" )
+      option str
+        (  short 'f'
+        <> long "fetch-dir"
+        <> help "Directory for fetched sources"
+        <> metavar metavarStr )
+
+    metavarStr :: String
+    metavarStr = case modeDesc of
+      Building -> "INDIR"
+      _        -> "OUTDIR"
 
 -- | Parse the options for the @build@ command.
 build :: Parser Build
 build = do
 
-  buildFetchDescr <- fetchDescription "Packages to build"
+  buildFetchDescr <- fetchDescription Building
   buildFetch      <- optFetch
   buildStrategy   <- optStrategy
   buildOutputDir  <- optOutputDir
@@ -151,13 +244,18 @@ build = do
     optStrategy :: Parser BuildStrategy
     optStrategy =
       bool Async TopoSort <$>
-        switch ( long "no-async" <> help "Disable asynchronous package building (useful for debugging)" )
+        switch (  long "no-async"
+               <> help "Disable asynchronous package building (useful for debugging)" )
 
     optFetch :: Parser Fetch
     optFetch =
       bool Fetch Prefetched <$>
-        switch ( long "prefetched" <> help "Use prefetched sources instead of fetching from Hackage")
+        switch (  long "prefetched"
+               <> help "Use prefetched sources instead of fetching from Hackage" )
 
     optOutputDir :: Parser FilePath
     optOutputDir =
-      option str ( short 'o' <> long "output-dir" <> help "Output directory" )
+      option str (  short 'o'
+                 <> long "output-dir"
+                 <> help "Output directory"
+                 <> metavar "OUTDIR" )

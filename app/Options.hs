@@ -4,7 +4,7 @@ module Options where
 import CabalPlan
   ( PkgSpecs, AllowNewer )
 import Config
-  ( Compiler, Cabal, BuildStrategy )
+  ( BuildStrategy, Compiler, Cabal, Verbosity )
 
 --------------------------------------------------------------------------------
 
@@ -15,11 +15,6 @@ data Opts = Opts { compiler  :: Compiler
                  , verbosity :: Verbosity
                  }
   deriving stock Show
-
--- | Verbosity level for the @build-env@ application.
-newtype Verbosity = Verbosity Int
-  deriving newtype (Eq, Ord)
-  deriving stock   Show
 
 -- | The mode in which to run the executable:
 --
@@ -39,12 +34,33 @@ data Mode
   | BuildMode Build
   deriving stock Show
 
--- | Inputs to computing a cabal plan.
+-- | How to specify which packages to build/constrain.
+data PackageData
+  -- | Explicit description of packages.
+  = Explicit PkgSpecs
+  -- | Parse package information from the given file.
+  --
+  -- The file contents will be interpreted as follows:
+  --
+  --   - pinned packages: this is a @cabal.config@ freeze file,
+  --     which uses @cabal.project@ syntax. See 'readCabalDotConfig'.
+  --
+  --   - seed packages: this is a list of seed packages to build,
+  --     with inline flags and constraints, and allow-newer stanzas.
+  --     See 'parseSeedFile'.
+  | FromFile FilePath
+  deriving stock Show
+
+-- | Inputs for the computation of a cabal plan.
 data PlanInputs
   = PlanInputs
-    { planPins       :: PkgSpecs
-    , planPkgs       :: PkgSpecs
-    , planAllowNewer :: AllowNewer }
+    { planPkgs       :: PackageData
+      -- ^ Seed dependencies for the build plan.
+    , planPins       :: Maybe PackageData
+      -- ^ Additional package constraints.
+    , planAllowNewer :: AllowNewer
+      -- ^ Allow-newer specification.
+    }
   deriving stock Show
 
 -- | Information about fetched sources: in which directory they belong,

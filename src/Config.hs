@@ -1,4 +1,13 @@
+-- |
+-- Module      :  Config
+-- Description :  Configuration options for @build-env@.
 module Config where
+
+-- base
+import Control.Monad
+  ( when )
+
+--------------------------------------------------------------------------------
 
 -- | Path to the @cabal@ executable.
 data Cabal = Cabal { cabalPath :: FilePath }
@@ -10,6 +19,25 @@ data Compiler =
            , ghcPkgPath :: FilePath
            }
   deriving stock Show
+
+-- | Verbosity level for the @build-env@ package.
+--
+-- The default verbosity level is 1.
+newtype Verbosity = Verbosity Int
+  deriving newtype (Eq, Ord)
+  deriving stock   Show
+
+normalMsg, verboseMsg :: Verbosity -> String -> IO ()
+normalMsg  v msg = when (v >= Verbosity 1) $ putStrLn msg
+verboseMsg v msg = when (v >= Verbosity 2) $ putStrLn msg
+
+cabalVerbosity :: Verbosity -> String
+cabalVerbosity (Verbosity i)
+  | i <= 1
+  = "-v0"
+cabalVerbosity (Verbosity 2) = "-v1"
+cabalVerbosity (Verbosity 3) = "-v2"
+cabalVerbosity (Verbosity _) = "-v3"
 
 -- | Build strategy for 'buildPlan'.
 data BuildStrategy

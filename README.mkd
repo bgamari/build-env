@@ -6,14 +6,14 @@ by `cabal-install`'s solver) into a free-standing package database.
 ## Example
 
 ```
-$ build-env plan -o plan.json lens
+$ build-env plan -p plan.json lens
 $ build-env fetch -p plan.json -f sources
 $ build-env build --prefetched -p plan.json -f sources -o install
 $ ls install/package.conf/lens*
 install/package.conf/lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401.conf
 $ ghc-pkg --package-db=install/package.conf field lens id
 id: lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401
-$ ghci -package-db install/package.conf/ -package-id lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401
+$ ghci -package-db install/package.conf/ -package lens
 GHCi, version 9.0.2: https://www.haskell.org/ghc/  :? for help
 λ> :ty Control.Lens.Lens
 Control.Lens.Lens
@@ -32,7 +32,3 @@ the `build` command alone:
 ```
 $ build-env build lens -f sources -o install
 ```
-
-## Todo
-
-* [ ] version constraints

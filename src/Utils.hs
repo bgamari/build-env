@@ -1,5 +1,8 @@
 {-# LANGUAGE CPP #-}
 
+-- |
+-- Module      :  Utils
+-- Description :  Utilities for @build-env@.
 module Utils
     ( callProcessIn
     , withTempDir
@@ -14,12 +17,16 @@ import GHC.Stack
 
 -- process
 import System.Process
+    ( CreateProcess(cwd)
+    , proc, createProcess, waitForProcess
+    )
 
 -- temporary
 import System.IO.Temp
     ( createTempDirectory
     , getCanonicalTemporaryDirectory
-    , withSystemTempDirectory )
+    , withSystemTempDirectory
+    )
 
 --------------------------------------------------------------------------------
 

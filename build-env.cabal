@@ -1,48 +1,94 @@
-cabal-version:      2.4
-name:               build-env
-version:            0.1.0.0
-author:             Ben Gamari
-maintainer:         ben@smart-cactus.org
+cabal-version: 2.4
+name:          build-env
+version:       0.1.0.0
+author:        Ben Gamari
+maintainer:    ben@smart-cactus.org
 
 common common
-    build-depends:      base >= 4.15 && < 4.18,
-                        bytestring,
-                        containers
-    default-language:   Haskell2010
-    default-extensions: BangPatterns,
-                        BlockArguments,
-                        DerivingStrategies,
-                        DisambiguateRecordFields,
-                        GeneralizedNewtypeDeriving,
-                        LambdaCase,
-                        NamedFieldPuns,
-                        StandaloneKindSignatures
-    ghc-options:        -Wall
-                        -Wcompat
-                        -fwarn-missing-local-signatures
-                        -fwarn-incomplete-patterns
-                        -fwarn-incomplete-uni-patterns
-                        -fwarn-missing-deriving-strategies
-                        -fno-warn-unticked-promoted-constructors
+
+    build-depends:
+        base
+          >= 4.15 && < 4.18
+      , bytestring
+          >= 0.10 && < 0.12
+      , containers
+         ^>= 0.6
+      , text
+          >= 1.2 && < 2.1
+
+    default-language:
+        Haskell2010
+
+    default-extensions:
+        BangPatterns
+      , BlockArguments
+      , DerivingStrategies
+      , DisambiguateRecordFields
+      , GeneralizedNewtypeDeriving
+      , LambdaCase
+      , NamedFieldPuns
+      , OverloadedStrings
+      , StandaloneKindSignatures
+      , ViewPatterns
+
+    ghc-options:
+      -Wall
+      -Wcompat
+      -fwarn-missing-local-signatures
+      -fwarn-incomplete-patterns
+      -fwarn-incomplete-uni-patterns
+      -fwarn-missing-deriving-strategies
+      -fno-warn-unticked-promoted-constructors
 
 library
-    import:           common
-    exposed-modules:  Build, BuildOne, CabalPlan, Config, Utils
-    hs-source-dirs:   src
-    build-depends:    process,
-                      filepath,
-                      directory,
-                      temporary,
-                      text,
-                      async,
-                      aeson
-    default-language: Haskell2010
+
+    import: common
+
+    exposed-modules:
+        Build
+      , BuildOne
+      , CabalPlan
+      , Config
+
+    other-modules:
+        Utils
+
+    hs-source-dirs:
+        src
+
+    build-depends:
+        async
+         ^>= 2.2
+      , aeson
+          >= 1.5 && < 2.2
+      , directory
+         ^>= 1.3
+      , filepath
+         ^>= 1.4
+      , process
+         ^>= 1.6
+      , temporary
+         ^>= 1.3
+
 
 executable build-env
-    import:           common
-    main-is:          Main.hs
-    build-depends:    optparse-applicative,
-                      build-env
-    ghc-options:      -threaded
-    hs-source-dirs:   app
-    other-modules:    Options, Parse
+
+    import: common
+
+    main-is: Main.hs
+
+    build-depends:
+        optparse-applicative
+          >= 0.15 && < 0.18
+      , build-env
+
+    ghc-options:
+        -threaded
+
+    hs-source-dirs:
+        app
+
+    other-modules:
+        File
+      , Options
+      , Parse

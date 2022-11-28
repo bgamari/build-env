@@ -1,7 +1,15 @@
+
+-- |
+-- Module      :  BuildOne
+-- Description :  Configure, build and install a single package
+--
+-- 'buildPackage' configures and builds a single package using the @Setup.hs@
+-- script, before registering it into a local package database using @ghc-pkg@.
 module BuildOne ( buildPackage ) where
 
 -- base
-import Control.Monad ( guard )
+import Control.Monad
+  ( guard )
 
 -- directory
 import System.Directory
@@ -16,7 +24,6 @@ import qualified Data.Text as Text
 
 -- build-env
 import Config
-  ( Compiler(..) )
 import Utils
   ( callProcessIn, exe )
 import CabalPlan
@@ -26,44 +33,76 @@ import qualified CabalPlan as Configured
 --------------------------------------------------------------------------------
 
 -- | Build a single package and register it in the package database.
-buildPackage :: Compiler -- ^ compiler
-             -> FilePath -- ^ source directory
-             -> FilePath -- ^ installation prefix
+buildPackage :: Verbosity
+             -> Compiler -- ^ which @ghc@ and @ghc-pkg@ executables to use
+             -> FilePath -- ^ directory of fetched sources
+             -> FilePath -- ^ installation directory (will be created if missing)
              -> CabalPlan
              -> ConfiguredUnit
              -> IO ()
-buildPackage comp srcDir installDir plan unit = do
+buildPackage verbosity comp srcDir installDir plan unit = do
+    let nmVersion = Text.unpack $
+                    pkgNameVersion
+                      (Configured.puPkgName unit)
+                      (Configured.puVersion unit)
+    normalMsg verbosity $ "Building " <> nmVersion
     setupHs <- findSetupHs srcDir
     let pkgDbDir = installDir </> "package.conf"
     createDirectoryIfMissing True pkgDbDir
     let setupArgs = [ setupHs, "-o"
                     , srcDir </> "Setup"
                     , "-package-db=" ++ pkgDbDir
+                    , ghcVerbosity verbosity
                     ] ++ (map packageId $ puSetupDepends unit)
+    verboseMsg verbosity $
+      "Compiling Setup.hs for " <> nmVersion
     callProcessIn "." (ghcPath comp) setupArgs
     let configureArgs = [ "--prefix", installDir
-                        , "--flags=" ++ showFlagSpec (puFlags unit)
+                        , "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit))
                         , "--cid=" ++ Text.unpack (unPkgId $ Configured.puId unit)
                         , "--package-db=" ++ pkgDbDir
                         , "--exact-configuration"
+                        , setupVerbosity verbosity
                         ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
                         ++ [Text.unpack $ unComponentName $ puComponentName unit]
         setupExe = srcDir </> "Setup" <.> exe
-    putStrLn $ "configure arguments: " ++ show configureArgs
-    callProcessIn srcDir setupExe $ ["configure"] ++ configureArgs
-    callProcessIn srcDir setupExe ["build"]
-    callProcessIn srcDir setupExe ["copy"]
+    verboseMsg verbosity $
+      "Configuring " <> nmVersion
+    callProcessIn srcDir setupExe $ ["configure", setupVerbosity verbosity] ++ configureArgs
+    verboseMsg verbosity $
+      "Building " <> nmVersion
+    callProcessIn srcDir setupExe ["build", setupVerbosity verbosity]
+    verboseMsg verbosity $
+      "Copying " <> nmVersion
+    callProcessIn srcDir setupExe ["copy", setupVerbosity verbosity]
     let pkgRegsFile = "pkg-reg.conf"
         pkgRegDir = srcDir </> pkgRegsFile
-    callProcessIn srcDir setupExe ["register", "--gen-pkg-config=" ++ pkgRegsFile]
+    verboseMsg verbosity $
+      "Creating package registration for " <> nmVersion
+    callProcessIn srcDir setupExe ["register", setupVerbosity verbosity, "--gen-pkg-config=" ++ pkgRegsFile]
     is_dir <- doesDirectoryExist pkgRegDir
     regFiles <-
         if is_dir
         then map (pkgRegDir </>) <$> listDirectory pkgRegDir
         else return [pkgRegDir]
     let register regFile =
-          callProcessIn srcDir (ghcPkgPath comp) ["register", "--package-db", pkgDbDir, regFile]
+          callProcessIn srcDir (ghcPkgPath comp)
+            [ "register"
+            , ghcPkgVerbosity verbosity
+            , "--package-db", pkgDbDir, regFile]
+    verboseMsg verbosity $
+      "Registering " <> nmVersion <> " into '" <> pkgRegDir <> "'"
     mapM_ register regFiles
+    normalMsg verbosity $ "Installed " <> nmVersion
+
+ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
+ghcVerbosity (Verbosity i)
+  | i <= 1
+  = "-v0"
+  | otherwise
+  = "-v1"
+ghcPkgVerbosity = ghcVerbosity
+setupVerbosity = ghcVerbosity
 
 packageId :: PkgId -> String
 packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId

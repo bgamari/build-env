@@ -1,12 +1,29 @@
-{-# LANGUAGE OverloadedStrings #-}
 
+-- |
+-- Module      :  Build
+-- Description :  Computing, fetching and building plans
+--
+-- 'computePlan' computes a @cabal@ plan by generating @pkg.cabal@ and
+-- @cabal.project@ files with the given dependencies, constraints, flags...,
+-- calling @cabal build --dry-run@ to compute a build plan, and parsing
+-- the resulting @plan.json@ file.
+--
+-- 'fetchPlan' calls @cabal unpack@ to fetch all packages in the given plan.
+--
+-- 'buildPlan' builds each package in the build plan from source,
+-- using 'buildPackage'. This can be done either asynchronously or sequentially
+-- in dependency order, depending on the 'BuildStrategy'.
 module Build
-    ( computePlan
-    , parsePlanBinary
-    , fetchPlan
-    , buildPlan
-    , test
-    ) where
+  ( -- * Computing, fetching and building plans
+    computePlan
+  , fetchPlan
+  , buildPlan
+
+    -- * Generating @pkg.cabal@ and @cabal.project@ files.
+  , CabalFilesContents(..)
+  , cabalFileContentsFromPackages
+  , cabalProjectContentsFromPackages
+  ) where
 
 -- base
 import Control.Monad.Fix
@@ -15,16 +32,12 @@ import Data.Char
   ( isSpace )
 import Data.Foldable
   ( for_ )
-import Data.List
-  ( intercalate, nub )
 import Data.Maybe
   ( mapMaybe, maybeToList )
+import Data.String
+  ( IsString )
 import Data.Version
   ( Version )
-
--- aeson
-import qualified Data.Aeson as Aeson
-  ( eitherDecode )
 
 -- async
 import Control.Concurrent.Async
@@ -38,10 +51,14 @@ import qualified Data.ByteString.Lazy as Lazy.ByteString
 import qualified Data.Graph as Graph
   ( graphFromEdges', reverseTopSort )
 import qualified Data.Map.Strict as Map
-  ( (!?), assocs, empty, fromList, keys, union )
+  ( (!?), assocs )
 import qualified Data.Map.Lazy as Lazy
   ( Map )
 import qualified Data.Map.Lazy as Lazy.Map
+  ( fromList )
+import Data.Set
+  ( Set )
+import qualified Data.Set as Set
   ( fromList )
 
 -- directory
@@ -50,11 +67,15 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>) )
+  ( (</>), (<.>) )
 
 -- text
-import qualified Data.Text as Text
-  ( all, unpack )
+import Data.Text
+  ( Text )
+import qualified Data.Text    as Text
+  ( all, intercalate, unlines, unpack, unwords )
+import qualified Data.Text.IO as Text
+  ( writeFile )
 
 -- build-env
 import BuildOne
@@ -66,37 +87,52 @@ import Utils
 
 --------------------------------------------------------------------------------
 
+-- | The name of the dummy cabal package on which we will call
+-- @cabal@ to obtain a build plan.
+dummyPackageName :: IsString str => str
+dummyPackageName = "build-env-dummy-package"
+
+-- | The package ID of the dummy package (version 0).
+dummyPackageId :: PkgId
+dummyPackageId = PkgId $ dummyPackageName <> "-0-inplace"
+
 -- | Query @cabal@ to obtain a build plan for the given packages,
 -- by reading the output @plan.json@ of a @cabal build --dry-run@ invocation.
 --
+-- Use 'generateCabalFilesContents' to generate the @cabal@ file contents
+-- from a collection of packages with constraints and flags. See also
+-- 'readCabalDotConfig' and 'parseSeedFile' for other ways of obtaining
+-- this information.
+--
 -- Use 'parsePlanBinary' to turn the returned 'CabalPlanBinary' into
 -- a 'CabalPlan'.
-computePlan :: Cabal
-            -> AllowNewer
-            -> PkgSpecs -- ^ pins: packages which we want to constrain at
-                        -- a particular version/flag, but which we don't
-                        -- necessarily want to build
-            -> PkgSpecs -- ^ packages we want to build
-                        -- (these override the pins)
+computePlan :: Verbosity
+            -> Cabal
+            -> CabalFilesContents
             -> IO CabalPlanBinary
-computePlan cabal (AllowNewer allowNewer) pins pkgs =
+computePlan verbosity cabal ( CabalFilesContents { cabalContents, projectContents } ) =
   withTempDir "build" \ dir -> do
-    putStrLn $ "Computing plan in build directory " ++ dir
-    writeFile (dir </> "cabal.project") projectContents
-    writeFile (dir </> "dummy-package.cabal") cabalContents
-    callProcessIn dir (cabalPath cabal) ["build", "--dry-run", "-v0"]
+    verboseMsg verbosity $ "Computing plan in build directory " ++ dir
+    Text.writeFile (dir </> "cabal" <.> "project") projectContents
+    Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents
+    callProcessIn dir (cabalPath cabal)
+      [ "build"
+      , "--dry-run"
+      , cabalVerbosity verbosity ]
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
-  where
-    allPkgs = pkgs `Map.union` pins -- union is left-biased: override pins with pkgs
-    projectContents = unlines
-        [ "packages: ."
-        ] ++ allowNewers
-          ++ flagSpecs
-        ++ constraints
 
-    constraints = unlines
-        [ unwords ["constraints:", Text.unpack (unPkgName nm), Text.unpack cts]
+-- | The contents of a dummy @cabal.project@ file, specifying
+-- package constraints, flags and allow-newer.
+cabalProjectContentsFromPackages :: PkgSpecs -> AllowNewer -> Text
+cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
+     "packages: .\n\n"
+   <> allowNewers
+   <> flagSpecs
+   <> constraints
+  where
+    constraints = Text.unlines
+        [ Text.unwords ["constraints:", unPkgName nm, cts]
         | (nm, ps) <- Map.assocs allPkgs
         , Constraints cts <- maybeToList $ psConstraints ps
         , not (Text.all isSpace cts)
@@ -106,14 +142,14 @@ computePlan cabal (AllowNewer allowNewer) pins pkgs =
       | null allowNewer
       = ""
       | otherwise
-      = "\nallow-newer:\n" ++
-        intercalate ","
-          [ "    " <> Text.unpack p <> ":" <> Text.unpack q <> "\n"
+      = "\nallow-newer:\n" <>
+        Text.intercalate ","
+          [ "    " <> p <> ":" <> q <> "\n"
           | (p,q) <- allowNewer ]
 
-    flagSpecs = unlines
-        [ unlines
-          [ "package " <> Text.unpack (unPkgName nm)
+    flagSpecs = Text.unlines
+        [ Text.unlines
+          [ "package " <> unPkgName nm
           , "  flags: " <> showFlagSpec (psFlags ps)
           ]
         | (nm, ps) <- Map.assocs allPkgs
@@ -121,46 +157,74 @@ computePlan cabal (AllowNewer allowNewer) pins pkgs =
         , not $ flagSpecIsEmpty flags
         ]
 
-    cabalContents = unlines
-        [ "cabal-version: 2.4"
-        , "name: dummy-package"
-        , "version: 0"
-        , "library"
-        , "  build-depends:"
-        ] ++ intercalate ",\n"
-             [ "    " <> Text.unpack (unPkgName nm)
-             | nm <- Map.keys pkgs ]
+-- | The contents of a dummy @cabal@ file with dependencies on
+-- the specified packages (without any constraints).
+--
+-- The corresponding package Id is 'dummyPackageId'.
+cabalFileContentsFromPackages :: [PkgName] -> Text
+cabalFileContentsFromPackages pkgs =
+  Text.unlines
+    [ "cabal-version: 2.4"
+    , "name: " <> dummyPackageName
+    , "version: 0"
+    , "library"
+    , "  build-depends:"
+    ] <> Text.intercalate ",\n"
+         [ "    " <> unPkgName nm
+         | nm <- pkgs ]
 
--- | Decode a 'CabalPlanBinary' into a 'CabalPlan'.
-parsePlanBinary :: CabalPlanBinary -> CabalPlan
-parsePlanBinary (CabalPlanBinary pb) =
-  case Aeson.eitherDecode pb of
-    Left  err  -> error ("parsePlan: failed to parse plan JSON\n" ++ err)
-    Right plan -> plan
+-- | The file contents of the cabal files of a cabal project;
+-- @pkg.cabal@ and @cabal.project@.
+data CabalFilesContents
+  = CabalFilesContents
+    { cabalContents   :: Text
+      -- ^ The package @.cabal@ file contents.
+    , projectContents :: Text
+      -- ^ The @cabal.project@ file contents.
+    }
 
--- | Fetch the sources of a 'CabalPlan'.
-fetchPlan :: Cabal
-          -> FilePath -- ^ directory for the sources
+-- | Fetch the sources of a 'CabalPlan', calling @cabal unpack@ on each
+-- package and putting it into the correspondingly named and versioned
+-- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
+--
+-- Note: this function will fail if a fetched source subdirectory
+-- already exists for one of packages in the plan.
+fetchPlan :: Verbosity
+          -> Cabal
+          -> FilePath -- ^ directory in which to put the sources
+                      -- (will be created if missing)
           -> CabalPlan
           -> IO ()
-fetchPlan cabal fetchDir0 cabalPlan = do
+fetchPlan verbosity cabal fetchDir0 cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
     createDirectoryIfMissing True fetchDir
-      -- TODO: cabal will fail if the src directories already exist
-    mapM_ (uncurry $ cabalFetch cabal fetchDir) pkgs
+    mapM_ (uncurry $ cabalFetch verbosity cabal fetchDir) pkgs
   where
-    pkgs = nub -- Some packages might have multiple components; we don't want to fetch the package multiple times.
-         $ mapMaybe (\case { PU_Configured ( ConfiguredUnit { puId = pkgId, puPkgName = nm, puVersion = ver } )
-                              | pkgId /= PkgId "dummy-package-0-inplace"
-                              -> Just (nm, ver)
-                           ; _ -> Nothing })
+    pkgs :: Set (PkgName, Version)
+    pkgs = Set.fromList
+               -- Some packages might have multiple components;
+               -- we don't want to fetch the package itself multiple times.
+         $ mapMaybe relevantPkgNameVersion
          $ planUnits cabalPlan
 
+    relevantPkgNameVersion :: PlanUnit -> Maybe (PkgName, Version)
+    relevantPkgNameVersion = \case
+      PU_Configured ( ConfiguredUnit { puId = pkgId, puPkgName = nm, puVersion = ver } )
+        | pkgId /= dummyPackageId
+        -> Just (nm, ver)
+      _ -> Nothing
+
 -- | Call @cabal unpack@ to fetch a single package from Hackage.
-cabalFetch :: Cabal -> FilePath -> PkgName -> Version -> IO ()
-cabalFetch cabal root nm ver = do
+cabalFetch :: Verbosity -> Cabal -> FilePath -> PkgName -> Version -> IO ()
+cabalFetch verbosity cabal root nm ver = do
+    normalMsg verbosity $
+      "Fetching " <> nameVersion
     callProcessIn root (cabalPath cabal)
-      [ "unpack", pkgNameVersion nm ver ]
+      [ "unpack"
+      , nameVersion
+      , cabalVerbosity verbosity ]
+  where
+    nameVersion = Text.unpack $ pkgNameVersion nm ver
 
 -- | Sort the units in a 'CabalPlan' in dependency order.
 sortPlan :: CabalPlan -> [ConfiguredUnit]
@@ -175,21 +239,23 @@ sortPlan plan =
        ]
 
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
--- and register them into a local package database.
-buildPlan :: Compiler
+-- by running their @Setup.hs@ scripts, and then register them
+-- into a local package database at @installdir/package.conf@.
+buildPlan :: Verbosity
+          -> Compiler
           -> FilePath  -- ^ fetched sources directory (input)
           -> FilePath  -- ^ installation directory (output)
           -> BuildStrategy
           -> CabalPlan -- ^ the build plan to execute
           -> IO ()
-buildPlan comp  fetchDir0 installDir0 buildStrat cabalPlan = do
+buildPlan verbosity comp fetchDir0 installDir0 buildStrat cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
     installDir <- canonicalizePath installDir0
     createDirectoryIfMissing True installDir
     let buildPkg :: ConfiguredUnit -> IO ()
         buildPkg pu@(ConfiguredUnit { puPkgName, puVersion }) = do
-            let srcDir = fetchDir </> pkgNameVersion puPkgName puVersion
-            buildPackage comp srcDir installDir cabalPlan pu
+            let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
+            buildPackage verbosity comp srcDir installDir cabalPlan pu
 
     if doAsync buildStrat
     then do unitAsyncs <- mfix \ unitAsyncs ->
@@ -208,7 +274,7 @@ buildPlan comp  fetchDir0 installDir0 buildStrat cabalPlan = do
 
     unitsToBuild :: [ConfiguredUnit]
     unitsToBuild
-      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= PkgId "dummy-package-0-inplace")
+      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyPackageId)
       $ if doTopoSort buildStrat
         then sortPlan cabalPlan
         else mapMaybe configuredUnitMaybe $ planUnits cabalPlan
@@ -217,26 +283,3 @@ buildPlan comp  fetchDir0 installDir0 buildStrat cabalPlan = do
     unitMap = Lazy.Map.fromList
               [ (puId, pu)
               | pu@( ConfiguredUnit { puId } ) <- unitsToBuild ]
-
-test :: IO ()
-test = do
-    let cabal      = Cabal "cabal"
-        compiler   = Compiler "ghc" "ghc-pkg"
-        fetchDir   = "fetch"
-        installDir = "install"
-        pins, pkgs :: PkgSpecs
-        pins = Map.empty
-        pkgs = Map.fromList
-             [ ( PkgName "lens"
-               , PkgSpec { psConstraints = Nothing, psFlags = mempty } )
-             , ( PkgName "finitary"
-               , PkgSpec { psConstraints = Just (Constraints ">= 2.1 && < 3.0")
-                         , psFlags = FlagSpec $ Map.fromList [ ("bitvec", False), ("vector", True) ] } )
-             , ( PkgName "gi-atk"
-               , PkgSpec { psConstraints = Just (Constraints ">= 2.0.25"), psFlags = mempty } )
-               ] -- Agda 2.6.2.2
-    pb <- computePlan cabal (AllowNewer [("*", "base")]) pins pkgs
-    let plan = parsePlanBinary pb
-    print plan
-    --fetchPlan cabal fetchDir plan
-    buildPlan compiler fetchDir installDir TopoSort plan

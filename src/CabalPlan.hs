@@ -1,10 +1,14 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
+-- |
+-- Module      :  CabalPlan
+-- Description :  Parsing @cabal@ @plan.json@ files.
 module CabalPlan where
 
 -- base
+import Data.Char
+  ( isAlphaNum )
 import Data.Maybe
   ( fromMaybe, mapMaybe )
 import Data.Version
@@ -12,7 +16,6 @@ import Data.Version
 
 -- aeson
 import Data.Aeson
---  ( FromJSON(..), (.:), withObject )
 
 -- bytestring
 import qualified Data.ByteString.Lazy as Lazy
@@ -28,10 +31,11 @@ import qualified Data.Map.Strict as Map
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( unpack )
+  ( all, pack, unpack, unwords )
 
 -------------------------------------------------------------------------------
 
+-- | Units in a @cabal@ @plan.json@ file.
 data CabalPlan = CabalPlan { planUnits :: [PlanUnit] }
 
 mapMaybePlanUnits :: (PlanUnit -> Maybe a) -> CabalPlan -> [a]
@@ -54,17 +58,25 @@ newtype PkgName = PkgName { unPkgName :: Text }
     deriving newtype (Eq, Ord, FromJSON)
 
 -- | The name + version string of a package.
-pkgNameVersion :: PkgName -> Version -> String
-pkgNameVersion (PkgName n) v = Text.unpack n <> "-" <> showVersion v
+pkgNameVersion :: PkgName -> Version -> Text
+pkgNameVersion (PkgName n) v = n <> "-" <> Text.pack (showVersion v)
 
+-- | Is the string a valid @cabal@ package name? That is, does it consist
+-- only of alphanumeric identifiers and hyphens?
+validPackageName :: Text -> Bool
+validPackageName = Text.all ( \ x -> isAlphaNum x || x == '-' )
+
+-- | Specification of package flags, e.g. @+foo -bar@.
+--
+-- @+@ corresponds to @True@ and @-@ to @False@.
 newtype FlagSpec = FlagSpec (Strict.Map Text Bool)
     deriving stock   Show
     deriving newtype (Eq, Ord, Semigroup, Monoid, FromJSON)
 
-showFlagSpec :: FlagSpec -> String
+showFlagSpec :: FlagSpec -> Text
 showFlagSpec (FlagSpec fs) =
-    unwords
-    [ sign <> Text.unpack flag
+    Text.unwords
+    [ sign <> flag
     | (flag, value) <- Map.toList fs
     , let sign = if value then "+" else "-"
     ]
@@ -72,6 +84,7 @@ showFlagSpec (FlagSpec fs) =
 flagSpecIsEmpty :: FlagSpec -> Bool
 flagSpecIsEmpty (FlagSpec fs) = null fs
 
+-- | The name of a cabal component, e.g. @lib:comp@.
 newtype ComponentName = ComponentName { unComponentName :: Text }
     deriving stock (Eq, Ord, Show)
 
@@ -148,17 +161,32 @@ instance FromJSON PlanUnit where
 
 --------------------------
 
+-- | A collection of cabal constraints, e.g. @>= 3.2 && < 3.4@.
+--
+--
 newtype Constraints = Constraints Text
   deriving stock Show
 
+-- | A mapping from package to its flags.
 type PkgSpecs = Strict.Map PkgName PkgSpec
 
+-- | A list of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
 newtype AllowNewer = AllowNewer [(Text, Text)]
   deriving stock Show
+  deriving newtype ( Semigroup, Monoid )
 
+-- | Constraints and flags for a package.
 data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
                        , psFlags :: FlagSpec
                        }
   deriving stock Show
 
+-- | Binary data underlying a @cabal@ @plan.json@ file.
 newtype CabalPlanBinary = CabalPlanBinary Lazy.ByteString
+
+-- | Decode a 'CabalPlanBinary' into a 'CabalPlan'.
+parsePlanBinary :: CabalPlanBinary -> CabalPlan
+parsePlanBinary (CabalPlanBinary pb) =
+  case eitherDecode pb of
+    Left  err  -> error ("parsePlanBinary: failed to parse plan JSON\n" ++ err)
+    Right plan -> plan
