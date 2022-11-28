@@ -32,3 +32,45 @@ the `build` command alone:
 ```
 $ build-env build lens -f sources -o install
 ```
+
+## Specifying packages
+
+Instead of passing the required packages by the command line, `build-env` can
+also read them from files:
+
+```
+$ build-env build --seeds SEEDS --freeze cabal.config -f sources -o install
+```
+
+This will compute a build plan for the packages specified in the `SEEDS` file,
+with versions of packages that aren't in the `SEEDS` file constrained as
+specified by the `cabal.config` file.
+
+Each line in the seeds file should be one of the following:
+
+  - a package with flags and constraints such as:
+
+    ```
+    pkg +flag1 -flag2 >= 0.1 && < 0.3 || == 0.5
+    ```
+
+    Flags and constraints are both optional.  
+    If they are both present, flags must come before constraints.  
+    The constraints must use valid `cabal` constraint syntax.
+
+  - an allow-newer specification such as:
+
+    ```
+    allow-newer: pkg1:pkg2,pkg3:base,*:ghc
+    ```
+
+    This uses `cabal` `allow-newer` syntax.
+
+  - an empty line or comment (starting with `--`).
+
+The `cabal.config` file should use valid `cabal.project` syntax, e.g.:
+
+```cabal
+constraints: pkg1 == 0.1,
+             pkg2 >= 3.0
+```
