@@ -5,7 +5,7 @@
 -- Description :  Utilities for @build-env@.
 module Utils
     ( callProcessIn
-    , withTempDir
+    , TempDirPermanence(..), withTempDir
     , exe
     ) where
 
@@ -27,6 +27,10 @@ import System.IO.Temp
     , getCanonicalTemporaryDirectory
     , withSystemTempDirectory
     )
+
+-- build-env
+import Config
+  ( TempDirPermanence(..) )
 
 --------------------------------------------------------------------------------
 
@@ -50,18 +54,14 @@ callProcessIn cwd prog args = do
         error ("command failed with exit code " ++ show i ++ ":\n"
               ++ "  > " ++ prog ++ argsStr )
 
--- | Set this to 'True' to prevent deletion of temporary directories.
---
--- Useful for debugging this library.
-noDelete :: Bool
-noDelete = False
-
-withTempDir :: String -> (FilePath -> IO a) -> IO a
-withTempDir name k
-  | noDelete  = do
-       root <- getCanonicalTemporaryDirectory
-       createTempDirectory root name >>= k
-  | otherwise = withSystemTempDirectory name k
+withTempDir :: TempDirPermanence -> String -> (FilePath -> IO a) -> IO a
+withTempDir del name k =
+  case del of
+    DeleteTempDirs
+      -> withSystemTempDirectory name k
+    Don'tDeleteTempDirs
+      -> do root <- getCanonicalTemporaryDirectory
+            createTempDirectory root name >>= k
 
 -- | OS-dependent executable file extension.
 exe :: String

@@ -4,7 +4,6 @@ module Options where
 import CabalPlan
   ( PkgSpecs, AllowNewer )
 import Config
-  ( BuildStrategy, Compiler, Cabal, Verbosity )
 
 --------------------------------------------------------------------------------
 
@@ -13,6 +12,7 @@ data Opts = Opts { compiler  :: Compiler
                  , cabal     :: Cabal
                  , mode      :: Mode
                  , verbosity :: Verbosity
+                 , delTemp   :: TempDirPermanence
                  }
   deriving stock Show
 

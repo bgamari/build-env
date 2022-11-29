@@ -83,7 +83,6 @@ import BuildOne
 import CabalPlan
 import Config
 import Utils
-  ( callProcessIn, withTempDir )
 
 --------------------------------------------------------------------------------
 
@@ -106,12 +105,13 @@ dummyPackageId = PkgId $ dummyPackageName <> "-0-inplace"
 --
 -- Use 'parsePlanBinary' to turn the returned 'CabalPlanBinary' into
 -- a 'CabalPlan'.
-computePlan :: Verbosity
+computePlan :: TempDirPermanence
+            -> Verbosity
             -> Cabal
             -> CabalFilesContents
             -> IO CabalPlanBinary
-computePlan verbosity cabal ( CabalFilesContents { cabalContents, projectContents } ) =
-  withTempDir "build" \ dir -> do
+computePlan delTemp verbosity cabal ( CabalFilesContents { cabalContents, projectContents } ) =
+  withTempDir delTemp "build" \ dir -> do
     verboseMsg verbosity $ "Computing plan in build directory " ++ dir
     Text.writeFile (dir </> "cabal" <.> "project") projectContents
     Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents

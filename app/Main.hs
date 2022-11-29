@@ -12,7 +12,9 @@ import qualified Data.Map as Map
 import Build
 import CabalPlan
 import Config
-  ( Cabal, Verbosity, normalMsg )
+  ( Cabal, Verbosity, TempDirPermanence
+  , normalMsg
+  )
 import File
   ( readCabalDotConfig, parseSeedFile )
 import Options
@@ -23,20 +25,20 @@ import Parse
 
 main :: IO ()
 main = do
-  Opts { compiler, cabal, mode, verbosity } <- runOptionsParser
+  Opts { compiler, cabal, mode, verbosity, delTemp } <- runOptionsParser
   case mode of
     PlanMode { planModeInputs, planOutput } -> do
       CabalPlanBinary planBinary <-
-        computePlanFromInputs verbosity cabal planModeInputs
+        computePlanFromInputs delTemp verbosity cabal planModeInputs
       normalMsg verbosity $
         "Writing build plan to '" <> planOutput <> "'"
       BSL.writeFile planOutput planBinary
     FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) -> do
-      plan <- getPlan verbosity cabal fetchInputPlan
+      plan <- getPlan delTemp verbosity cabal fetchInputPlan
       doFetch verbosity cabal fetchDir plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildOutputDir } ) -> do
-      plan <- getPlan verbosity cabal fetchInputPlan
+      plan <- getPlan delTemp verbosity cabal fetchInputPlan
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
@@ -85,20 +87,24 @@ parsePlanPackages verbosity (FromFile fp) =
 
 -- | Compute a build plan by calling @cabal build --dry-run@ with the generated
 -- @pkg.cabal@ and @cabal.project@ files.
-computePlanFromInputs :: Verbosity -> Cabal -> PlanInputs -> IO CabalPlanBinary
-computePlanFromInputs verbosity cabal inputs
+computePlanFromInputs :: TempDirPermanence
+                      -> Verbosity
+                      -> Cabal
+                      -> PlanInputs
+                      -> IO CabalPlanBinary
+computePlanFromInputs delTemp verbosity cabal inputs
     = do cabalFileContents <- parsePlanInputs verbosity inputs
          normalMsg verbosity "Computing build plan"
-         computePlan verbosity cabal cabalFileContents
+         computePlan delTemp verbosity cabal cabalFileContents
 
 -- | Retrieve a cabal build plan, either by computing it or using
 -- a pre-existing @plan.json@ file.
-getPlan :: Verbosity -> Cabal -> Plan -> IO CabalPlan
-getPlan verbosity cabal planMode = do
+getPlan :: TempDirPermanence -> Verbosity -> Cabal -> Plan -> IO CabalPlan
+getPlan delTemp verbosity cabal planMode = do
    planBinary <-
      case planMode of
        ComputePlan planInputs   ->
-        computePlanFromInputs verbosity cabal planInputs
+        computePlanFromInputs delTemp verbosity cabal planInputs
        UsePlan { planJSONPath } ->
          do
            normalMsg verbosity $

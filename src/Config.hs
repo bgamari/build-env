@@ -60,3 +60,9 @@ doAsync :: BuildStrategy -> Bool
 doAsync TopoSort      = False
 doAsync Async         = True
 doAsync TopoSortAsync = True
+
+-- | How to handle deletion of temporary directories.
+data TempDirPermanence
+  = DeleteTempDirs
+  | Don'tDeleteTempDirs
+  deriving stock Show

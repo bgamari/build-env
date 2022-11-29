@@ -42,7 +42,8 @@ options = do
   compiler  <- optCompiler
   cabal     <- optCabal
   verbosity <- optVerbosity
-  return $ Opts { compiler, cabal, mode, verbosity }
+  delTemp   <- optTempDirPermanence
+  return $ Opts { compiler, cabal, mode, verbosity, delTemp }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
@@ -66,6 +67,13 @@ optVerbosity =
       <> help "Verbosity"
       <> metavar "INT"
       <> value 1 )
+
+-- | Parse whether to delete temporary directories.
+optTempDirPermanence :: Parser TempDirPermanence
+optTempDirPermanence =
+    bool DeleteTempDirs Don'tDeleteTempDirs <$>
+      switch (  long "preserve-tmp"
+             <> help "Preserve temporary build directories (useful for debugging)" )
 
 -- | Parse the mode in which to run the application: plan, fetch, build.
 optMode :: Parser Mode
