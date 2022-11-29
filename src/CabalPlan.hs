@@ -25,7 +25,6 @@ import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.Map.Strict as Strict
   ( Map )
 import qualified Data.Map.Strict as Map
-  ( toList )
 
 -- text
 import Data.Text
@@ -51,11 +50,11 @@ instance FromJSON CabalPlan where
 
 newtype PkgId = PkgId { unPkgId :: Text }
     deriving stock Show
-    deriving newtype (Eq, Ord, FromJSON)
+    deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
 newtype PkgName = PkgName { unPkgName :: Text }
     deriving stock   Show
-    deriving newtype (Eq, Ord, FromJSON)
+    deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
 -- | The name + version string of a package.
 pkgNameVersion :: PkgName -> Version -> Text
@@ -87,7 +86,6 @@ flagSpecIsEmpty (FlagSpec fs) = null fs
 -- | The name of a cabal component, e.g. @lib:comp@.
 newtype ComponentName = ComponentName { unComponentName :: Text }
     deriving stock (Eq, Ord, Show)
-
 
 data PlanUnit
   = PU_Preexisting PreexistingUnit
@@ -145,18 +143,31 @@ instance FromJSON PlanUnit where
             return $ PreexistingUnit {..}
 
         configured o = do
-            puId      <- o .: "id"
-            puPkgName <- o .: "pkg-name"
-            puVersion <- o .: "pkg-version"
-            compName  <- fromMaybe "lib" <$> o .:? "component-name"
+            puId      <- o .:  "id"
+            puPkgName <- o .:  "pkg-name"
+            puVersion <- o .:  "pkg-version"
+            mbComps   <- o .:? "components"
+            (compName, puDepends, puSetupDepends) <-
+              case mbComps of
+                Nothing -> do
+                  deps     <- o .: "depends"
+                  compName <- o .: "component-name"
+                  return (compName, deps, [])
+                Just comps -> do
+                  lib       <- comps .:  "lib"
+                  deps      <- lib   .:  "depends"
+                  mbSetup   <- comps .:? "setup"
+                  setupDeps <-
+                    case mbSetup of
+                      Nothing    -> return []
+                      Just setup -> setup .: "depends"
+                  return ("lib", deps, setupDeps)
             let puComponentName =
                   ComponentName $
                     case compName of
                       "lib" -> unPkgName puPkgName
                       other -> other
-            puFlags        <- o .: "flags"
-            puDepends      <- o .: "depends"
-            puSetupDepends <- fromMaybe [] <$> o .:? "setup-depends"
+            puFlags        <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
             return $ ConfiguredUnit {..}
 
 --------------------------

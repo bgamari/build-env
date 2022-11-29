@@ -64,7 +64,7 @@ buildPackage verbosity comp srcDir installDir plan unit = do
                         , "--exact-configuration"
                         , setupVerbosity verbosity
                         ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
-                        ++ [Text.unpack $ unComponentName $ puComponentName unit]
+                        ++ [ buildTarget unit ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> nmVersion
@@ -79,7 +79,8 @@ buildPackage verbosity comp srcDir installDir plan unit = do
         pkgRegDir = srcDir </> pkgRegsFile
     verboseMsg verbosity $
       "Creating package registration for " <> nmVersion
-    callProcessIn srcDir setupExe ["register", setupVerbosity verbosity, "--gen-pkg-config=" ++ pkgRegsFile]
+    callProcessIn srcDir setupExe [ "register", setupVerbosity verbosity
+                                  , "--gen-pkg-config=" ++ pkgRegsFile ]
     is_dir <- doesDirectoryExist pkgRegDir
     regFiles <-
         if is_dir
@@ -106,6 +107,15 @@ setupVerbosity = ghcVerbosity
 
 packageId :: PkgId -> String
 packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
+
+buildTarget :: ConfiguredUnit -> String
+buildTarget unit
+  | ':' `elem` tgt
+  = tgt
+  | otherwise
+  = "lib:" <> tgt
+  where
+    tgt = Text.unpack $ unComponentName $ puComponentName unit
 
 -- | Create the text of a @--dependency=PKG:COMP:PKGID@ flag to specify
 -- the package ID of a dependency to the configure script.
