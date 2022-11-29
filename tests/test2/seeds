@@ -1,0 +1,11 @@
+
+aeson
+
+allow-newer: *:base, *:template-haskell, time:Win32
+
+tagged +deepseq >= 0.8 && < 0.9
+
+allow-newer: *:ghc-prim
+           -- aeson:text
+
+--allow-newer: *:*
