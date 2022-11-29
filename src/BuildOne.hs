@@ -19,6 +19,8 @@ import System.FilePath
   ( (</>), (<.>) )
 
 -- text
+import Data.Text
+  ( Text )
 import qualified Data.Text as Text
   ( unpack )
 
@@ -41,11 +43,9 @@ buildPackage :: Verbosity
              -> ConfiguredUnit
              -> IO ()
 buildPackage verbosity comp srcDir installDir plan unit = do
-    let nmVersion = Text.unpack $
-                    pkgNameVersion
-                      (Configured.puPkgName unit)
-                      (Configured.puVersion unit)
-    normalMsg verbosity $ "Building " <> nmVersion
+    let target = buildTarget unit
+        printableName = Text.unpack $ componentName $ puComponentName unit
+    normalMsg verbosity $ "Building " <> printableName
     setupHs <- findSetupHs srcDir
     let pkgDbDir = installDir </> "package.conf"
     createDirectoryIfMissing True pkgDbDir
@@ -55,7 +55,7 @@ buildPackage verbosity comp srcDir installDir plan unit = do
                     , ghcVerbosity verbosity
                     ] ++ (map packageId $ puSetupDepends unit)
     verboseMsg verbosity $
-      "Compiling Setup.hs for " <> nmVersion
+      "Compiling Setup.hs for " <> printableName
     callProcessIn "." (ghcPath comp) setupArgs
     let configureArgs = [ "--prefix", installDir
                         , "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit))
@@ -64,21 +64,21 @@ buildPackage verbosity comp srcDir installDir plan unit = do
                         , "--exact-configuration"
                         , setupVerbosity verbosity
                         ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
-                        ++ [ buildTarget unit ]
+                        ++ [ target ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
-      "Configuring " <> nmVersion
+      "Configuring " <> printableName
     callProcessIn srcDir setupExe $ ["configure", setupVerbosity verbosity] ++ configureArgs
     verboseMsg verbosity $
-      "Building " <> nmVersion
+      "Building " <> printableName
     callProcessIn srcDir setupExe ["build", setupVerbosity verbosity]
     verboseMsg verbosity $
-      "Copying " <> nmVersion
+      "Copying " <> printableName
     callProcessIn srcDir setupExe ["copy", setupVerbosity verbosity]
     let pkgRegsFile = "pkg-reg.conf"
         pkgRegDir = srcDir </> pkgRegsFile
     verboseMsg verbosity $
-      "Creating package registration for " <> nmVersion
+      "Creating package registration for " <> printableName
     callProcessIn srcDir setupExe [ "register", setupVerbosity verbosity
                                   , "--gen-pkg-config=" ++ pkgRegsFile ]
     is_dir <- doesDirectoryExist pkgRegDir
@@ -92,9 +92,9 @@ buildPackage verbosity comp srcDir installDir plan unit = do
             , ghcPkgVerbosity verbosity
             , "--package-db", pkgDbDir, regFile]
     verboseMsg verbosity $
-      "Registering " <> nmVersion <> " into '" <> pkgRegDir <> "'"
+      "Registering " <> printableName <> " into '" <> pkgRegDir <> "'"
     mapM_ register regFiles
-    normalMsg verbosity $ "Installed " <> nmVersion
+    normalMsg verbosity $ "Installed " <> printableName
 
 ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
 ghcVerbosity (Verbosity i)
@@ -109,18 +109,13 @@ packageId :: PkgId -> String
 packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
 
 buildTarget :: ConfiguredUnit -> String
-buildTarget unit
-  | ':' `elem` tgt
-  = tgt
-  | otherwise
-  = "lib:" <> tgt
-  where
-    tgt = Text.unpack $ unComponentName $ puComponentName unit
+buildTarget ( ConfiguredUnit { puComponentName = ComponentName ty nm } )
+  = Text.unpack (ty <> ":" <> nm)
 
 -- | Create the text of a @--dependency=PKG:COMP:PKGID@ flag to specify
 -- the package ID of a dependency to the configure script.
 dependency :: CabalPlan -> ConfiguredUnit -> PkgId -> String
-dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
+dependency fullPlan unit pkgId = "--dependency=" ++ Text.unpack (mkDependency pu)
   where
     pu :: PlanUnit
     pu = case mapMaybePlanUnits ( \ u -> do { guard ( pkgId == planUnitId u) ; return u }) fullPlan of
@@ -128,11 +123,12 @@ dependency fullPlan unit pkgId = "--dependency=" ++ mkDependency pu
                         \unit:" ++ show (Configured.puPkgName unit) ++ "\n\
                         \dependency:" ++ show pkgId
           cu:_ -> cu
-    mkDependency :: PlanUnit -> String
+    mkDependency :: PlanUnit -> Text
     mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
-      = Text.unpack nm ++ "=" ++ Text.unpack (unPkgId pkgId)
-    mkDependency ( PU_Configured ( ConfiguredUnit { puComponentName = ComponentName comp } ) )
-      = Text.unpack comp ++ "=" ++ Text.unpack (unPkgId pkgId)
+      = nm <> "=" <> unPkgId pkgId
+    mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName pkg
+                                                  , puComponentName = ComponentName _ comp } ) )
+      = pkg <> ":" <> comp <> "=" <> unPkgId pkgId
 
 -- | Find the @Setup.hs@ file to use, or create one using @main = defaultMain@
 -- if none exist.

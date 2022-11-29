@@ -30,7 +30,6 @@ import qualified Data.Map.Strict as Map
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( all, pack, unpack, unwords )
 
 -------------------------------------------------------------------------------
 
@@ -84,7 +83,12 @@ flagSpecIsEmpty :: FlagSpec -> Bool
 flagSpecIsEmpty (FlagSpec fs) = null fs
 
 -- | The name of a cabal component, e.g. @lib:comp@.
-newtype ComponentName = ComponentName { unComponentName :: Text }
+data ComponentName =
+  ComponentName { componentType :: Text
+                   -- ^ What's before the colon, e.g. @lib@, @exe@, @setup@...
+                , componentName :: Text
+                   -- ^ The actual name of the component
+                }
     deriving stock (Eq, Ord, Show)
 
 data PlanUnit
@@ -146,13 +150,21 @@ instance FromJSON PlanUnit where
             puId      <- o .:  "id"
             puPkgName <- o .:  "pkg-name"
             puVersion <- o .:  "pkg-version"
+            puFlags   <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
             mbComps   <- o .:? "components"
-            (compName, puDepends, puSetupDepends) <-
+            (puComponentName, puDepends, puSetupDepends) <-
               case mbComps of
                 Nothing -> do
                   deps     <- o .: "depends"
                   compName <- o .: "component-name"
-                  return (compName, deps, [])
+                  let comp
+                        | compName == "lib"
+                        = ComponentName "lib" (unPkgName puPkgName)
+                        | (ty,nm) <- Text.break (== ':') compName
+                        = if Text.null nm
+                          then error ( "parseJSON PlanUnit: unsupported component name" <> Text.unpack compName )
+                          else ComponentName ty (Text.drop 1 nm)
+                  return (comp, deps, [])
                 Just comps -> do
                   lib       <- comps .:  "lib"
                   deps      <- lib   .:  "depends"
@@ -161,13 +173,7 @@ instance FromJSON PlanUnit where
                     case mbSetup of
                       Nothing    -> return []
                       Just setup -> setup .: "depends"
-                  return ("lib", deps, setupDeps)
-            let puComponentName =
-                  ComponentName $
-                    case compName of
-                      "lib" -> unPkgName puPkgName
-                      other -> other
-            puFlags        <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
+                  return (ComponentName "lib" (unPkgName puPkgName), deps, setupDeps)
             return $ ConfiguredUnit {..}
 
 --------------------------
