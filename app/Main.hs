@@ -37,14 +37,15 @@ main = do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       doFetch verbosity cabal fetchDir plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
-                      , buildFetch, buildStrategy, buildOutputDir } ) -> do
+                      , buildFetch, buildStrategy, buildOutputDir
+                      , configureArgs } ) -> do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
       normalMsg verbosity $
         "Building and registering packages in directory '" <> buildOutputDir <> "'"
-      buildPlan verbosity compiler fetchDir buildOutputDir buildStrategy plan
+      buildPlan verbosity compiler fetchDir buildOutputDir buildStrategy configureArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

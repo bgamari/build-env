@@ -8,8 +8,8 @@ import Data.Bool
   ( bool )
 
 -- containers
-import qualified Data.Map.Strict as M
-  ( fromList )
+import qualified Data.Map.Strict as Map
+  ( fromList, singleton )
 
 -- optparse-applicative
 import Options.Applicative
@@ -24,6 +24,7 @@ import qualified Data.Text as Text
 import CabalPlan
 import Config
 import Options
+import Target
 
 --------------------------------------------------------------------------------
 
@@ -184,7 +185,7 @@ dependencies modeDesc
     seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
 
     pkgs :: Parser PkgSpecs
-    pkgs = M.fromList <$>
+    pkgs = Map.fromList <$>
            some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
 
     pkgSpec :: ReadM (PkgName, PkgSpec)
@@ -243,9 +244,11 @@ build = do
   buildFetch      <- optFetch
   buildStrategy   <- optStrategy
   buildOutputDir  <- optOutputDir
+  configureArgs   <- optConfigureArgs
 
   return $ Build { buildFetch, buildFetchDescr
-                 , buildStrategy, buildOutputDir }
+                 , buildStrategy, buildOutputDir
+                 , configureArgs }
 
   where
 
@@ -267,3 +270,12 @@ build = do
                  <> long "output-dir"
                  <> help "Output directory"
                  <> metavar "OUTDIR" )
+
+    -- TODO: this only supports passing @setup configure@ arguments
+    -- for all packages at once, rather than per-package.
+    optConfigureArgs :: Parser TargetArgs
+    optConfigureArgs = do
+      args <- many $ option str (  long "configure-arg"
+                                <> help "Argument to 'setup configure'"
+                                <> metavar "ARG" )
+      return $ TargetArgs $ Map.singleton AllPkgs args

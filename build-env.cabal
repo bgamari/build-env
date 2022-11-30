@@ -49,6 +49,7 @@ library
       , BuildOne
       , CabalPlan
       , Config
+      , Target
 
     other-modules:
         Utils

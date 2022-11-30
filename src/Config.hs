@@ -27,9 +27,10 @@ newtype Verbosity = Verbosity Int
   deriving newtype (Eq, Ord)
   deriving stock   Show
 
-normalMsg, verboseMsg :: Verbosity -> String -> IO ()
+normalMsg, verboseMsg, debugMsg :: Verbosity -> String -> IO ()
 normalMsg  v msg = when (v >= Verbosity 1) $ putStrLn msg
 verboseMsg v msg = when (v >= Verbosity 2) $ putStrLn msg
+debugMsg   v msg = when (v >= Verbosity 3) $ putStrLn msg
 
 cabalVerbosity :: Verbosity -> String
 cabalVerbosity (Verbosity i)

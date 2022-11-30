@@ -2,8 +2,9 @@ module Options where
 
 -- build-env
 import CabalPlan
-  ( PkgSpecs, AllowNewer )
 import Config
+import Target
+  ( TargetArgs )
 
 --------------------------------------------------------------------------------
 
@@ -92,6 +93,7 @@ data Fetch
   | Prefetched
   deriving stock Show
 
+-- | Information needed to perform a build.
 data Build
   = Build
     { buildFetch      :: Fetch
@@ -104,5 +106,7 @@ data Build
       -- ^ How to perform the build (see 'BuildStrategy').
     , buildOutputDir  :: FilePath
       -- ^ The output directory for the build.
+    , configureArgs   :: TargetArgs
+      -- ^ Arguments to pass to the @setup configure@ script.
     }
   deriving stock Show

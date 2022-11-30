@@ -82,6 +82,7 @@ import BuildOne
   ( buildPackage )
 import CabalPlan
 import Config
+import Target
 import Utils
 
 --------------------------------------------------------------------------------
@@ -244,19 +245,22 @@ sortPlan plan =
 -- into a local package database at @installdir/package.conf@.
 buildPlan :: Verbosity
           -> Compiler
-          -> FilePath  -- ^ fetched sources directory (input)
-          -> FilePath  -- ^ installation directory (output)
+          -> FilePath   -- ^ fetched sources directory (input)
+          -> FilePath   -- ^ installation directory (output)
           -> BuildStrategy
-          -> CabalPlan -- ^ the build plan to execute
+          -> TargetArgs -- ^ extra @setup configure@ arguments
+                        -- (use this to specify haddock, hsc2hs, etc)
+          -> CabalPlan  -- ^ the build plan to execute
           -> IO ()
-buildPlan verbosity comp fetchDir0 installDir0 buildStrat cabalPlan = do
+buildPlan verbosity comp fetchDir0 installDir0 buildStrat configureArgs cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
     installDir <- canonicalizePath installDir0
     createDirectoryIfMissing True installDir
     let buildPkg :: ConfiguredUnit -> IO ()
-        buildPkg pu@(ConfiguredUnit { puPkgName, puVersion }) = do
-            let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
-            buildPackage verbosity comp srcDir installDir cabalPlan pu
+        buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
+          let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
+              pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
+          buildPackage verbosity comp srcDir installDir pkgConfigureArgs cabalPlan pu
 
     if doAsync buildStrat
     then do unitAsyncs <- mfix \ unitAsyncs ->

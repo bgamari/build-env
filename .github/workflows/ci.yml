@@ -36,7 +36,7 @@ jobs:
       run: |
         cabal run exe:build-env -- plan lens -p plan.json -v2
         cabal run exe:build-env -- fetch -p plan.json -f sources -v2
-        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --no-async -v2
+        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" --no-async -v2
         ghc-pkg --package-db=install/package.conf field lens id
 
     - name: "Build aeson using a seed file and cabal.config"

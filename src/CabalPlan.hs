@@ -47,10 +47,13 @@ instance FromJSON CabalPlan where
     parseJSON = withObject "cabal plan" \ o ->
         CabalPlan <$> o .: "install-plan"
 
+-- | A unique identifier for a package,
+-- e.g. @lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401@
 newtype PkgId = PkgId { unPkgId :: Text }
     deriving stock Show
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
+-- | A cabal package name, e.g. @lens@, @aeson@.
 newtype PkgName = PkgName { unPkgName :: Text }
     deriving stock   Show
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)

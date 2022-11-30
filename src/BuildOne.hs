@@ -34,15 +34,20 @@ import qualified CabalPlan as Configured
 
 --------------------------------------------------------------------------------
 
--- | Build a single package and register it in the package database.
+-- | Build a single unit and register it in the package database.
 buildPackage :: Verbosity
              -> Compiler -- ^ which @ghc@ and @ghc-pkg@ executables to use
              -> FilePath -- ^ directory of fetched sources
              -> FilePath -- ^ installation directory (will be created if missing)
+             -> [String] -- ^ extra @setup configure@ arguments for this unit
+                         -- (use this to specify haddock, hsc2hs, etc)
              -> CabalPlan
              -> ConfiguredUnit
              -> IO ()
-buildPackage verbosity comp srcDir installDir plan unit = do
+buildPackage verbosity ( Compiler { ghcPath, ghcPkgPath } )
+             srcDir installDir
+             userConfigureArgs
+             plan unit = do
     let target = buildTarget unit
         printableName = Text.unpack $ componentName $ puComponentName unit
     normalMsg verbosity $ "Building " <> printableName
@@ -56,19 +61,29 @@ buildPackage verbosity comp srcDir installDir plan unit = do
                     ] ++ (map packageId $ puSetupDepends unit)
     verboseMsg verbosity $
       "Compiling Setup.hs for " <> printableName
-    callProcessIn "." (ghcPath comp) setupArgs
-    let configureArgs = [ "--prefix", installDir
-                        , "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit))
+    callProcessIn "." ghcPath setupArgs
+    let flagsArg = case puFlags unit of
+          flags
+            | flagSpecIsEmpty flags
+            -> []
+            | otherwise
+            -> [ "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit)) ]
+        configureArgs = [ "--with-compiler", ghcPath
+                        , "--prefix", installDir
                         , "--cid=" ++ Text.unpack (unPkgId $ Configured.puId unit)
                         , "--package-db=" ++ pkgDbDir
                         , "--exact-configuration"
                         , setupVerbosity verbosity
-                        ] ++ ( map (dependency plan unit) $ Configured.puDepends unit )
+                        ] ++ flagsArg
+                          ++ userConfigureArgs
+                          ++ ( map (dependency plan unit) $ Configured.puDepends unit )
                         ++ [ target ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> printableName
-    callProcessIn srcDir setupExe $ ["configure", setupVerbosity verbosity] ++ configureArgs
+    debugMsg verbosity $
+      "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
+    callProcessIn srcDir setupExe $ ["configure"] ++ configureArgs
     verboseMsg verbosity $
       "Building " <> printableName
     callProcessIn srcDir setupExe ["build", setupVerbosity verbosity]
@@ -87,7 +102,7 @@ buildPackage verbosity comp srcDir installDir plan unit = do
         then map (pkgRegDir </>) <$> listDirectory pkgRegDir
         else return [pkgRegDir]
     let register regFile =
-          callProcessIn srcDir (ghcPkgPath comp)
+          callProcessIn srcDir ghcPkgPath
             [ "register"
             , ghcPkgVerbosity verbosity
             , "--package-db", pkgDbDir, regFile]
@@ -103,7 +118,7 @@ ghcVerbosity (Verbosity i)
   | otherwise
   = "-v1"
 ghcPkgVerbosity = ghcVerbosity
-setupVerbosity = ghcVerbosity
+setupVerbosity  = ghcVerbosity
 
 packageId :: PkgId -> String
 packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
