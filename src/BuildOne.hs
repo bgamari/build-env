@@ -35,14 +35,16 @@ import qualified CabalPlan as Configured
 --------------------------------------------------------------------------------
 
 -- | Build a single unit and register it in the package database.
+--
+-- Note: this function will fail if the unit has already been registered.
 buildPackage :: Verbosity
-             -> Compiler -- ^ which @ghc@ and @ghc-pkg@ executables to use
-             -> FilePath -- ^ directory of fetched sources
-             -> FilePath -- ^ installation directory (will be created if missing)
-             -> [String] -- ^ extra @setup configure@ arguments for this unit
-                         -- (use this to specify haddock, hsc2hs, etc)
-             -> CabalPlan
-             -> ConfiguredUnit
+             -> Compiler  -- ^ which @ghc@ and @ghc-pkg@ executables to use
+             -> FilePath  -- ^ directory of fetched sources
+             -> FilePath  -- ^ installation directory (will be created if missing)
+             -> [String]  -- ^ extra @setup configure@ arguments for this unit
+                          -- (use this to specify haddock, hsc2hs, etc)
+             -> CabalPlan -- ^ build plan to follow (used to specify dependencies)
+             -> ConfiguredUnit -- ^ the unit to build
              -> IO ()
 buildPackage verbosity ( Compiler { ghcPath, ghcPkgPath } )
              srcDir installDir
@@ -58,7 +60,7 @@ buildPackage verbosity ( Compiler { ghcPath, ghcPkgPath } )
                     , srcDir </> "Setup"
                     , "-package-db=" ++ pkgDbDir
                     , ghcVerbosity verbosity
-                    ] ++ (map packageId $ puSetupDepends unit)
+                    ] ++ (map unitIdArg $ puSetupDepends unit)
     verboseMsg verbosity $
       "Compiling Setup.hs for " <> printableName
     callProcessIn "." ghcPath setupArgs
@@ -70,13 +72,13 @@ buildPackage verbosity ( Compiler { ghcPath, ghcPkgPath } )
             -> [ "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit)) ]
         configureArgs = [ "--with-compiler", ghcPath
                         , "--prefix", installDir
-                        , "--cid=" ++ Text.unpack (unPkgId $ Configured.puId unit)
+                        , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
                         , "--package-db=" ++ pkgDbDir
                         , "--exact-configuration"
                         , setupVerbosity verbosity
                         ] ++ flagsArg
                           ++ userConfigureArgs
-                          ++ ( map (dependency plan unit) $ Configured.puDepends unit )
+                          ++ ( map (dependencyArg plan unit) $ Configured.puDepends unit )
                         ++ [ target ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
@@ -105,7 +107,8 @@ buildPackage verbosity ( Compiler { ghcPath, ghcPkgPath } )
           callProcessIn srcDir ghcPkgPath
             [ "register"
             , ghcPkgVerbosity verbosity
-            , "--package-db", pkgDbDir, regFile]
+            , "--package-db", pkgDbDir
+            , regFile ]
     verboseMsg verbosity $
       "Registering " <> printableName <> " into '" <> pkgRegDir <> "'"
     mapM_ register regFiles
@@ -120,33 +123,38 @@ ghcVerbosity (Verbosity i)
 ghcPkgVerbosity = ghcVerbosity
 setupVerbosity  = ghcVerbosity
 
-packageId :: PkgId -> String
-packageId (PkgId pkgId) = "-package-id " ++ Text.unpack pkgId
+-- | The argument @-package-id PKG_ID@.
+unitIdArg :: UnitId -> String
+unitIdArg (UnitId unitId) = "-package-id " ++ Text.unpack unitId
 
+-- | The target to configure and build.
 buildTarget :: ConfiguredUnit -> String
 buildTarget ( ConfiguredUnit { puComponentName = ComponentName ty nm } )
   = Text.unpack (ty <> ":" <> nm)
 
--- | Create the text of a @--dependency=PKG:COMP:PKGID@ flag to specify
--- the package ID of a dependency to the configure script.
-dependency :: CabalPlan -> ConfiguredUnit -> PkgId -> String
-dependency fullPlan unit pkgId = "--dependency=" ++ Text.unpack (mkDependency pu)
+-- | The argument @--dependency=PKG:COMP=UNIT_ID@.
+--
+-- Used to specify the 'UnitId' of a dependency to the configure script.
+-- This allows us to perform a build using the specific dependencies we have
+-- available, ignoring any bounds in the cabal file.
+dependencyArg :: CabalPlan -> ConfiguredUnit -> UnitId -> String
+dependencyArg fullPlan unit unitId = "--dependency=" ++ Text.unpack (mkDependency pu)
   where
     pu :: PlanUnit
-    pu = case mapMaybePlanUnits ( \ u -> do { guard ( pkgId == planUnitId u) ; return u }) fullPlan of
+    pu = case mapMaybePlanUnits ( \ u -> do { guard ( unitId == planUnitId u) ; return u }) fullPlan of
           [] -> error $ "buildPackage: can't find dependency in build plan\n\
                         \unit:" ++ show (Configured.puPkgName unit) ++ "\n\
-                        \dependency:" ++ show pkgId
+                        \dependency:" ++ show unitId
           cu:_ -> cu
     mkDependency :: PlanUnit -> Text
     mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
-      = nm <> "=" <> unPkgId pkgId
+      = nm <> "=" <> unUnitId unitId
     mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName pkg
                                                   , puComponentName = ComponentName _ comp } ) )
-      = pkg <> ":" <> comp <> "=" <> unPkgId pkgId
+      = pkg <> ":" <> comp <> "=" <> unUnitId unitId
 
--- | Find the @Setup.hs@ file to use, or create one using @main = defaultMain@
--- if none exist.
+-- | Find the @Setup.hs@/@Setup.lhs@ file to use,
+-- or create one using @main = defaultMain@ if none exist.
 findSetupHs :: FilePath -> IO FilePath
 findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
   where

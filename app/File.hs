@@ -6,7 +6,6 @@ module File
 import Data.Either
   ( partitionEithers )
 
-
 -- containers
 import Data.Map
   ( Map )

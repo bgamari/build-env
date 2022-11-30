@@ -105,6 +105,7 @@ data ModeDescription
   | Building
   deriving stock Show
 
+-- | Text describing a mode of the @build-env@ executable.
 modeDescription :: ModeDescription -> String
 modeDescription modeDesc =
   case modeDesc of

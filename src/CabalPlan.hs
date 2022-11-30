@@ -49,7 +49,7 @@ instance FromJSON CabalPlan where
 
 -- | A unique identifier for a package,
 -- e.g. @lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401@
-newtype PkgId = PkgId { unPkgId :: Text }
+newtype UnitId = UnitId { unUnitId :: Text }
     deriving stock Show
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
@@ -103,33 +103,35 @@ configuredUnitMaybe :: PlanUnit -> Maybe ConfiguredUnit
 configuredUnitMaybe (PU_Configured pu)  = Just pu
 configuredUnitMaybe (PU_Preexisting {}) = Nothing
 
-planUnitId :: PlanUnit -> PkgId
+planUnitId :: PlanUnit -> UnitId
 planUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
 planUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
 
 -- | All the dependencies of a unit: @depends@ and @setup-depends@.
-allDepends :: ConfiguredUnit -> [PkgId]
+allDepends :: ConfiguredUnit -> [UnitId]
 allDepends (ConfiguredUnit{puDepends, puSetupDepends}) =
   puDepends ++ puSetupDepends
 
+-- | Information about a built-in pre-existing unit (such as @base@).
 data PreexistingUnit
   = PreexistingUnit
-    { puId      :: PkgId
+    { puId      :: UnitId
     , puPkgName :: PkgName
     , puVersion :: Version
-    , puDepends :: [PkgId]
+    , puDepends :: [UnitId]
     }
   deriving stock Show
 
+-- | Information about a unit: name, version, dependencies, flags.
 data ConfiguredUnit
   = ConfiguredUnit
-    { puId            :: PkgId
+    { puId            :: UnitId
     , puPkgName       :: PkgName
     , puVersion       :: Version
     , puComponentName :: ComponentName
     , puFlags         :: FlagSpec
-    , puDepends       :: [PkgId]
-    , puSetupDepends  :: [PkgId]
+    , puDepends       :: [UnitId]
+    , puSetupDepends  :: [UnitId]
     }
   deriving stock Show
 
@@ -182,12 +184,10 @@ instance FromJSON PlanUnit where
 --------------------------
 
 -- | A collection of cabal constraints, e.g. @>= 3.2 && < 3.4@.
---
---
 newtype Constraints = Constraints Text
   deriving stock Show
 
--- | A mapping from package to its flags.
+-- | A mapping from a package name to its flags.
 type PkgSpecs = Strict.Map PkgName PkgSpec
 
 -- | A list of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.

@@ -92,9 +92,9 @@ import Utils
 dummyPackageName :: IsString str => str
 dummyPackageName = "build-env-dummy-package"
 
--- | The package ID of the dummy package (version 0).
-dummyPackageId :: PkgId
-dummyPackageId = PkgId $ dummyPackageName <> "-0-inplace"
+-- | The 'UnitId' of the (local) dummy package (version 0).
+dummyUnitId :: UnitId
+dummyUnitId = UnitId $ dummyPackageName <> "-0-inplace"
 
 -- | Query @cabal@ to obtain a build plan for the given packages,
 -- by reading the output @plan.json@ of a @cabal build --dry-run@ invocation.
@@ -211,8 +211,8 @@ fetchPlan verbosity cabal fetchDir0 cabalPlan = do
 
     relevantPkgNameVersion :: PlanUnit -> Maybe (PkgName, Version)
     relevantPkgNameVersion = \case
-      PU_Configured ( ConfiguredUnit { puId = pkgId, puPkgName = nm, puVersion = ver } )
-        | pkgId /= dummyPackageId
+      PU_Configured ( ConfiguredUnit { puId = unitId, puPkgName = nm, puVersion = ver } )
+        | unitId /= dummyUnitId
         -> Just (nm, ver)
       _ -> Nothing
 
@@ -243,6 +243,9 @@ sortPlan plan =
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
 -- by running their @Setup.hs@ scripts, and then register them
 -- into a local package database at @installdir/package.conf@.
+--
+-- Note: this function will fail if one of the packages has already been
+-- registed in the package database.
 buildPlan :: Verbosity
           -> Compiler
           -> FilePath   -- ^ fetched sources directory (input)
@@ -266,8 +269,8 @@ buildPlan verbosity comp fetchDir0 installDir0 buildStrat configureArgs cabalPla
     then do unitAsyncs <- mfix \ unitAsyncs ->
               let doPkgAsync :: ConfiguredUnit -> IO ()
                   doPkgAsync pu = do
-                      for_ (allDepends pu) \ depPkgId ->
-                        for_ (unitAsyncs Map.!? depPkgId) \ cu ->
+                      for_ (allDepends pu) \ depUnitId ->
+                        for_ (unitAsyncs Map.!? depUnitId) \ cu ->
                           -- (Nothing for Preexisting packages)
                           wait cu
                       buildPkg pu
@@ -279,12 +282,12 @@ buildPlan verbosity comp fetchDir0 installDir0 buildStrat configureArgs cabalPla
 
     unitsToBuild :: [ConfiguredUnit]
     unitsToBuild
-      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyPackageId)
+      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyUnitId)
       $ if doTopoSort buildStrat
         then sortPlan cabalPlan
         else mapMaybe configuredUnitMaybe $ planUnits cabalPlan
 
-    unitMap :: Lazy.Map PkgId ConfiguredUnit
+    unitMap :: Lazy.Map UnitId ConfiguredUnit
     unitMap = Lazy.Map.fromList
               [ (puId, pu)
               | pu@( ConfiguredUnit { puId } ) <- unitsToBuild ]
