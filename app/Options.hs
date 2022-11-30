@@ -1,3 +1,5 @@
+{-# LANGUAGE DataKinds #-}
+
 module Options where
 
 -- build-env
@@ -104,7 +106,7 @@ data Build
       -- and the build plan they correspond to.
     , buildStrategy   :: BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
-    , buildOutputDir  :: FilePath
+    , buildDestDir    :: DestDir Raw
       -- ^ The output directory for the build.
     , configureArgs   :: TargetArgs
       -- ^ Arguments to pass to the @setup configure@ script.

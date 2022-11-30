@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 
 -- |
 -- Module      :  Build
@@ -79,7 +80,6 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildOne
-  ( buildPackage )
 import CabalPlan
 import Config
 import Target
@@ -246,37 +246,42 @@ sortPlan plan =
 --
 -- Note: this function will fail if one of the packages has already been
 -- registed in the package database.
-buildPlan :: Verbosity
+buildPlan :: TempDirPermanence
+          -> Verbosity
           -> Compiler
           -> FilePath   -- ^ fetched sources directory (input)
-          -> FilePath   -- ^ installation directory (output)
+          -> DestDir Raw
+               -- ^ installation directory structure (output)
           -> BuildStrategy
-          -> TargetArgs -- ^ extra @setup configure@ arguments
+          -> TargetArgs -- ^ extra @Setup configure@ arguments
                         -- (use this to specify haddock, hsc2hs, etc)
           -> CabalPlan  -- ^ the build plan to execute
           -> IO ()
-buildPlan verbosity comp fetchDir0 installDir0 buildStrat configureArgs cabalPlan = do
+buildPlan delTemp verbosity comp fetchDir0 destDir0 buildStrat configureArgs cabalPlan
+  = do
     fetchDir <- canonicalizePath fetchDir0
-    installDir <- canonicalizePath installDir0
+    destDir@( DestDir { installDir })
+      <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
-    let buildPkg :: ConfiguredUnit -> IO ()
-        buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
-          let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
-              pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
-          buildPackage verbosity comp srcDir installDir pkgConfigureArgs cabalPlan pu
+    withTempDir delTemp "build" \ buildDir -> do
+      let buildPkg :: ConfiguredUnit -> IO ()
+          buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
+            let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
+                pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
+            buildPackage verbosity comp srcDir buildDir destDir pkgConfigureArgs cabalPlan pu
 
-    if doAsync buildStrat
-    then do unitAsyncs <- mfix \ unitAsyncs ->
-              let doPkgAsync :: ConfiguredUnit -> IO ()
-                  doPkgAsync pu = do
-                      for_ (allDepends pu) \ depUnitId ->
-                        for_ (unitAsyncs Map.!? depUnitId) \ cu ->
-                          -- (Nothing for Preexisting packages)
-                          wait cu
-                      buildPkg pu
-               in traverse (async . doPkgAsync) unitMap
-            mapM_ wait unitAsyncs
-    else for_ unitsToBuild buildPkg
+      if doAsync buildStrat
+      then do unitAsyncs <- mfix \ unitAsyncs ->
+                let doPkgAsync :: ConfiguredUnit -> IO ()
+                    doPkgAsync pu = do
+                        for_ (allDepends pu) \ depUnitId ->
+                          for_ (unitAsyncs Map.!? depUnitId) \ cu ->
+                            -- (Nothing for Preexisting packages)
+                            wait cu
+                        buildPkg pu
+                 in traverse (async . doPkgAsync) unitMap
+              mapM_ wait unitAsyncs
+      else for_ unitsToBuild buildPkg
 
   where
 

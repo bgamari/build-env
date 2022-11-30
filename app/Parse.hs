@@ -1,5 +1,6 @@
 
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE DataKinds #-}
 
 module Parse ( options, runOptionsParser ) where
 
@@ -244,11 +245,11 @@ build = do
   buildFetchDescr <- fetchDescription Building
   buildFetch      <- optFetch
   buildStrategy   <- optStrategy
-  buildOutputDir  <- optOutputDir
+  buildDestDir    <- optDestDir
   configureArgs   <- optConfigureArgs
 
   return $ Build { buildFetch, buildFetchDescr
-                 , buildStrategy, buildOutputDir
+                 , buildStrategy, buildDestDir
                  , configureArgs }
 
   where
@@ -265,12 +266,23 @@ build = do
         switch (  long "prefetched"
                <> help "Use prefetched sources instead of fetching from Hackage" )
 
-    optOutputDir :: Parser FilePath
-    optOutputDir =
-      option str (  short 'o'
-                 <> long "output-dir"
-                 <> help "Output directory"
-                 <> metavar "OUTDIR" )
+    optDestDir :: Parser (DestDir Raw)
+    optDestDir = do
+      prefix <-
+        option str (  short 'o'
+                   <> long "prefix"
+                   <> help "Installation prefix"
+                   <> metavar "OUTDIR" )
+      destDir <-
+        option str (  long "dest-dir"
+                   <> help "Installation destination directory"
+                   <> value "/"
+                   <> metavar "OUTDIR" )
+      return $
+        DestDir
+          { destDir, prefix
+          , installDir = () -- computed after path canonicalisation
+          }
 
     -- TODO: this only supports passing @setup configure@ arguments
     -- for all packages at once, rather than per-package.

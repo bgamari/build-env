@@ -28,6 +28,7 @@ common common
       , LambdaCase
       , NamedFieldPuns
       , OverloadedStrings
+      , StandaloneDeriving
       , StandaloneKindSignatures
       , ViewPatterns
 

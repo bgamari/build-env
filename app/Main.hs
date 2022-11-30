@@ -12,9 +12,6 @@ import qualified Data.Map as Map
 import Build
 import CabalPlan
 import Config
-  ( Cabal, Verbosity, TempDirPermanence
-  , normalMsg
-  )
 import File
   ( readCabalDotConfig, parseSeedFile )
 import Options
@@ -37,15 +34,18 @@ main = do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       doFetch verbosity cabal fetchDir plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
-                      , buildFetch, buildStrategy, buildOutputDir
+                      , buildFetch, buildStrategy, buildDestDir
                       , configureArgs } ) -> do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
       normalMsg verbosity $
-        "Building and registering packages in directory '" <> buildOutputDir <> "'"
-      buildPlan verbosity compiler fetchDir buildOutputDir buildStrategy configureArgs plan
+        mconcat
+          [ "Building and registering packages\n"
+          , "  dest-dir: '", destDir buildDestDir, "'\n"
+          , "    prefix: '", prefix  buildDestDir , "'" ]
+      buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy configureArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

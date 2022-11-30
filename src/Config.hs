@@ -1,3 +1,8 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
+
 -- |
 -- Module      :  Config
 -- Description :  Configuration options for @build-env@.
@@ -6,6 +11,16 @@ module Config where
 -- base
 import Control.Monad
   ( when )
+import Data.Kind
+  ( Type )
+
+-- directory
+import System.Directory
+  ( canonicalizePath )
+
+-- filepath
+import System.FilePath
+  ( (</>) )
 
 --------------------------------------------------------------------------------
 
@@ -67,3 +82,41 @@ data TempDirPermanence
   = DeleteTempDirs
   | Don'tDeleteTempDirs
   deriving stock Show
+
+-- | The directory structure relevant to installation: @dest-dir@ and @prefix@.
+--
+-- If the type parameter is 'Raw', filepaths can be relative.
+-- If it is 'Canonicalised', the filepaths must be absolute.
+--
+-- See 'installDir'.
+type DestDir :: PathType -> Type
+data DestDir pathTy =
+  DestDir
+    { destDir     :: FilePath
+      -- ^ Build @destdir@.
+    , prefix      :: FilePath
+      -- ^ The build prefix.
+    , installDir  :: InstallDir pathTy
+      -- ^ The installation directory @<dest-dir>/<prefix>@.
+    }
+
+deriving stock instance Show (InstallDir pathTy) => Show (DestDir pathTy)
+
+data PathType = Raw | Canonicalised
+
+-- | We need to canonicalise paths before computing an installation directory.
+--
+-- This type family keeps track of whether we have done so or not.
+type InstallDir :: PathType -> Type
+type family InstallDir pathTy where
+  InstallDir Raw           = ()
+  InstallDir Canonicalised = FilePath
+
+-- | Canonicalise a 'DestDir', computing the appropriate
+-- installation directory @<dest-dir>/<prefix>@.
+canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
+canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 }) = do
+  prefix     <- canonicalizePath prefix0
+  destDir    <- canonicalizePath destDir0
+  installDir <- canonicalizePath ( destDir0 </> prefix )
+  return $ DestDir { destDir, prefix, installDir }
