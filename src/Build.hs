@@ -144,10 +144,9 @@ cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
       = ""
       | otherwise
       = Text.unlines $
-          [ "allow-newer:" ]
-          ++
-          [ "    " <> p <> ":" <> q <> ","
-          | (p,q) <- allowNewer ]
+          "allow-newer:" :
+            [ "    " <> p <> ":" <> q <> ","
+            | (p,q) <- allowNewer ]
 
     flagSpecs = Text.unlines
         [ Text.unlines

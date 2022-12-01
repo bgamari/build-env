@@ -13,6 +13,8 @@ import Control.Monad
   ( guard )
 import Data.Foldable
   ( for_ )
+import Data.Functor
+  ( ($>) )
 
 -- directory
 import System.Directory
@@ -88,7 +90,7 @@ buildPackage verbosity
                     , srcDir </> "Setup"
                     , "-package-db=" ++ tempPkgDbDir
                     , ghcVerbosity verbosity
-                    ] ++ (map unitIdArg $ puSetupDepends unit)
+                    ] ++ map unitIdArg (puSetupDepends unit)
     verboseMsg verbosity $
       "Compiling Setup.hs for " <> printableName
     callProcessIn "." ghcPath setupArgs
@@ -108,14 +110,15 @@ buildPackage verbosity
                         , setupVerbosity verbosity
                         ] ++ flagsArg
                           ++ userConfigureArgs
-                          ++ ( map (dependencyArg plan unit) $ Configured.puDepends unit )
+                          ++ map ( dependencyArg plan unit )
+                              ( Configured.puDepends unit )
                         ++ [ buildTarget unit ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> printableName
     debugMsg verbosity $
       "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
-    callProcessIn srcDir setupExe $ ["configure"] ++ configureArgs
+    callProcessIn srcDir setupExe $ "configure" : configureArgs
 
     -- Build
     verboseMsg verbosity $
@@ -125,7 +128,7 @@ buildPackage verbosity
     -- Copy
     verboseMsg verbosity $
       "Copying " <> printableName
-    callProcessIn srcDir setupExe $
+    callProcessIn srcDir setupExe
       [ "copy", setupVerbosity verbosity
       , "--destdir", destDir ]
 
@@ -134,7 +137,7 @@ buildPackage verbosity
     let pkgRegsFile = "pkg-reg.conf"
         pkgRegDir = srcDir </> pkgRegsFile
         dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
-               , (finalPkgDbDir, "final"    , [], ["--force"] ++ userGhcPkgArgs) ]
+               , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
     for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) -> do
 
       verboseMsg verbosity $
@@ -193,11 +196,13 @@ dependencyArg :: CabalPlan -> ConfiguredUnit -> UnitId -> String
 dependencyArg fullPlan unit unitId = "--dependency=" ++ Text.unpack (mkDependency pu)
   where
     pu :: PlanUnit
-    pu = case mapMaybePlanUnits ( \ u -> do { guard ( unitId == planUnitId u) ; return u }) fullPlan of
+    pu = case mapMaybePlanUnits matchingUnitId fullPlan of
           [] -> error $ "buildPackage: can't find dependency in build plan\n\
                         \unit:" ++ show (Configured.puPkgName unit) ++ "\n\
                         \dependency:" ++ show unitId
           cu:_ -> cu
+    matchingUnitId :: PlanUnit -> Maybe PlanUnit
+    matchingUnitId u = guard ( unitId == planUnitId u ) $> u
     mkDependency :: PlanUnit -> Text
     mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
       = nm <> "=" <> unUnitId unitId

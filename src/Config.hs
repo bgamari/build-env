@@ -118,7 +118,7 @@ type family InstallDir pathTy where
 -- | Canonicalise a 'DestDir', computing the appropriate
 -- installation directory @<dest-dir>/<prefix>@.
 canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
-canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 }) = do
+canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
   prefix     <- canonicalizePath prefix0
   destDir    <- canonicalizePath destDir0
   installDir <- canonicalizePath ( destDir0 </> dropDrive prefix )

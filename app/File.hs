@@ -99,8 +99,7 @@ parsePkgSpec l =
     parseSpec flags (w:ws)
       | Just (s,f) <- Text.uncons w
       , s == '+' || s == '-'
-      , let b = if s == '+' then True else False
-      = parseSpec (Map.insert f b flags) ws
+      = parseSpec (Map.insert f (s == '+') flags) ws
       | otherwise
       = PkgSpec { psConstraints = Just $ Constraints (Text.unwords (w:ws))
                 , psFlags       = FlagSpec flags }

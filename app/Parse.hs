@@ -191,10 +191,14 @@ dependencies modeDesc
            some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
 
     pkgSpec :: ReadM (PkgName, PkgSpec)
-    pkgSpec = (,) <$> (PkgName <$> str)
-                  <*> (PkgSpec Nothing <$> pure mempty)
-                    -- TODO: flags & constraints not yet supported by
-                    -- the command-line interface; use a SEED file instead.
+    pkgSpec = do
+      pkgName <- str
+      return $
+        ( PkgName pkgName
+        , PkgSpec Nothing mempty
+            -- TODO: flags & constraints not yet supported by
+            -- the command-line interface; use a SEED file instead.
+        )
 
     pkgsHelp, seedsHelp :: String
     (pkgsHelp, seedsHelp) = (what <> " seed packages", what <> " seed file")
