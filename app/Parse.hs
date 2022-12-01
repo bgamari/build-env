@@ -247,10 +247,11 @@ build = do
   buildStrategy   <- optStrategy
   buildDestDir    <- optDestDir
   configureArgs   <- optConfigureArgs
+  ghcPkgArgs      <- optGhcPkgArgs
 
   return $ Build { buildFetch, buildFetchDescr
                  , buildStrategy, buildDestDir
-                 , configureArgs }
+                 , configureArgs, ghcPkgArgs }
 
   where
 
@@ -289,6 +290,12 @@ build = do
     optConfigureArgs :: Parser TargetArgs
     optConfigureArgs = do
       args <- many $ option str (  long "configure-arg"
-                                <> help "Argument to 'setup configure'"
+                                <> help "Pass argument to 'Setup configure'"
                                 <> metavar "ARG" )
       return $ TargetArgs $ Map.singleton AllPkgs args
+
+    optGhcPkgArgs :: Parser [String]
+    optGhcPkgArgs =
+      many $ option str (  long "ghc-pkg-arg"
+                        <> help "Pass argument to 'ghc-pkg register'"
+                        <> metavar "ARG" )

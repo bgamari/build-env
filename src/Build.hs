@@ -255,9 +255,13 @@ buildPlan :: TempDirPermanence
           -> BuildStrategy
           -> TargetArgs -- ^ extra @Setup configure@ arguments
                         -- (use this to specify haddock, hsc2hs, etc)
+          -> [String]   -- ^ extra @ghc-pkg@ arguments
           -> CabalPlan  -- ^ the build plan to execute
           -> IO ()
-buildPlan delTemp verbosity comp fetchDir0 destDir0 buildStrat configureArgs cabalPlan
+buildPlan delTemp verbosity comp fetchDir0 destDir0
+          buildStrat
+          configureArgs ghcPkgArgs
+          cabalPlan
   = do
     fetchDir <- canonicalizePath fetchDir0
     dest@( DestDir { installDir, prefix, destDir } )
@@ -275,7 +279,9 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0 buildStrat configureArgs cab
           buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
             let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
                 pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
-            buildPackage verbosity comp srcDir buildDir dest pkgConfigureArgs cabalPlan pu
+            buildPackage verbosity comp srcDir buildDir dest
+              pkgConfigureArgs ghcPkgArgs
+              cabalPlan pu
 
       if doAsync buildStrat
       then do unitAsyncs <- mfix \ unitAsyncs ->

@@ -35,13 +35,15 @@ main = do
       doFetch verbosity cabal fetchDir plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildDestDir
-                      , configureArgs } ) -> do
+                      , configureArgs, ghcPkgArgs } ) -> do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
       normalMsg verbosity "Building and registering packages"
-      buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy configureArgs plan
+      buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy
+        configureArgs ghcPkgArgs
+        plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

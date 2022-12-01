@@ -64,24 +64,27 @@ buildPackage :: Verbosity
              -> DestDir Canonicalised
                   -- ^ installation directory structure
              -> [String]  -- ^ extra @Setup configure@ arguments for this unit
+             -> [String]  -- ^ extra @ghc-pkg register@ arguments
              -> CabalPlan -- ^ build plan to follow (used to specify dependencies)
              -> ConfiguredUnit -- ^ the unit to build
              -> IO ()
 buildPackage verbosity
              ( Compiler { ghcPath, ghcPkgPath } )
              srcDir tempBuildDir ( DestDir { prefix, destDir, installDir } )
-             userConfigureArgs
+             userConfigureArgs userGhcPkgArgs
              plan unit = do
     let target = buildTarget unit
         printableName = Text.unpack $ componentName $ puComponentName unit
     normalMsg verbosity $ "Building " <> printableName
 
-    -- Setup
-    setupHs <- findSetupHs srcDir
+    -- Create the package database directories (if they don't already exist).
+    -- See Note [Using two package databases].
     let tempPkgDbDir  = tempBuildDir </> "package.conf"
         finalPkgDbDir = installDir   </> "package.conf"
-          -- See Note [Using two package databases].
     mapM_ (createDirectoryIfMissing True) [ tempPkgDbDir, finalPkgDbDir ]
+
+    -- Setup
+    setupHs <- findSetupHs srcDir
     let setupArgs = [ setupHs, "-o"
                     , srcDir </> "Setup"
                     , "-package-db=" ++ tempPkgDbDir
@@ -132,7 +135,7 @@ buildPackage verbosity
     let pkgRegsFile = "pkg-reg.conf"
         pkgRegDir = srcDir </> pkgRegsFile
         dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
-               , (finalPkgDbDir, "final"    , [], ["--force"]) ]
+               , (finalPkgDbDir, "final"    , [], ["--force"] ++ userGhcPkgArgs) ]
     for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) -> do
 
       verboseMsg verbosity $
