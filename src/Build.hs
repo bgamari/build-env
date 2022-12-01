@@ -215,13 +215,13 @@ fetchPlan verbosity cabal fetchDir0 cabalPlan = do
         -> Just (nm, ver)
       _ -> Nothing
 
--- | Call @cabal unpack@ to fetch a single package from Hackage.
+-- | Call @cabal get@ to fetch a single package from Hackage.
 cabalFetch :: Verbosity -> Cabal -> FilePath -> PkgName -> Version -> IO ()
 cabalFetch verbosity cabal root nm ver = do
     normalMsg verbosity $
       "Fetching " <> nameVersion
     callProcessIn root (cabalPath cabal)
-      [ "unpack"
+      [ "get"
       , nameVersion
       , cabalVerbosity verbosity ]
   where
