@@ -13,7 +13,7 @@ import Build
 import CabalPlan
 import Config
 import File
-  ( readCabalDotConfig, parseSeedFile )
+  ( parseCabalDotConfigPkgs, parseSeedFile )
 import Options
 import Parse
   ( runOptionsParser )
@@ -65,11 +65,13 @@ parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
            Just (FromFile pinCabalConfig) -> do
              normalMsg verbosity $
                "Reading 'cabal.config' file at '" <> pinCabalConfig <> "'"
-             pins <- readCabalDotConfig pinCabalConfig
+             pins <- parseCabalDotConfigPkgs pinCabalConfig
              return $
-               cabalProjectContentsFromPackages pkgs allAllowNewer <> pins
-               -- A @cabal.config@ file uses valid @cabal.project@ syntax,
-               -- so we can directly append it to the generated @cabal.project@.
+               cabalProjectContentsFromPackages
+                 (pkgs `unionPkgSpecs` pins)
+                   -- NB: unionPkgsSpecs is left-biased: constraints from the
+                   -- SEED file override constraints from the cabal.config file.
+                 allAllowNewer
            Just (Explicit pinnedPkgs) -> do
              let allPkgs = pkgs `Map.union` pinnedPkgs
              return $ cabalProjectContentsFromPackages allPkgs allAllowNewer

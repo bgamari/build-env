@@ -1,8 +1,10 @@
 module File
-  ( readCabalDotConfig, parseSeedFile )
+  ( parseCabalDotConfigPkgs, parseSeedFile )
   where
 
 -- base
+import Data.Char
+  ( isSpace )
 import Data.Either
   ( partitionEithers )
 
@@ -22,23 +24,50 @@ import CabalPlan
 
 --------------------------------------------------------------------------------
 
--- | Read a @cabal.config@ file, filtering out lines we don't want
--- (such as @--with-compiler@).
+-- | Parse constrained packages from the @constraints@ stanza
+-- of the @cabal.config@ file at the given filepath:
 --
--- If the file contains valid @cabal.project@ syntax (which this function
--- does /not/ check), the output will also be valid @cabal.project@ syntax.
-readCabalDotConfig :: FilePath -> IO Text
-readCabalDotConfig fp
-    =  Text.unlines
-    .  filter ( not . uselessLine . Text.strip )
-    .  Text.lines
-   <$> Text.readFile fp
+-- > constraints: pkg1 ==ver1,
+-- >              pkg2 ==ver2,
+-- > ...
+--
+-- This function disregards all other contents of the @cabal.config@ package.
+parseCabalDotConfigPkgs :: FilePath -> IO PkgSpecs
+parseCabalDotConfigPkgs fp = do
+  ls <-  filter ( not . isCommentLine . Text.strip )
+      .  Text.lines
+     <$> Text.readFile fp
+  return $ outsideStanza Map.empty ls
   where
-    uselessLine :: Text -> Bool
-    uselessLine l
-        =  Text.null l
-        || Text.isPrefixOf "--" l
-        || Text.isPrefixOf "with-compiler" l
+    outsideStanza :: PkgSpecs -> [Text] -> PkgSpecs
+    outsideStanza pkgs []
+      = pkgs
+    outsideStanza pkgs (l:ls)
+      | Just rest <- Text.stripPrefix "constraints:" l
+      = inConstraintsStanza (pkgs `addPkgFromLine` rest) ls
+      | otherwise
+      = outsideStanza pkgs ls
+
+    inConstraintsStanza :: PkgSpecs -> [Text] -> PkgSpecs
+    inConstraintsStanza pkgs []
+      = pkgs
+    inConstraintsStanza pkgs (l:ls)
+      | let (ws, rest) = Text.span isSpace l
+      , not $ Text.null ws
+      = inConstraintsStanza (pkgs `addPkgFromLine` rest) ls
+      | otherwise
+      = outsideStanza pkgs (l:ls)
+
+    addPkgFromLine :: PkgSpecs -> Text -> PkgSpecs
+    addPkgFromLine pkgs l =
+      let (pkgName, pkgSpec) = parseCabalDotConfigLine l
+      in  Map.insert pkgName pkgSpec pkgs
+
+parseCabalDotConfigLine :: Text -> (PkgName, PkgSpec)
+parseCabalDotConfigLine
+  = parsePkgSpec "'cabal.config' file"
+  . Text.dropAround ((==) ',')
+      -- drop commas
 
 -- | Parse a seed file. Each line must either be:
 --
@@ -52,7 +81,7 @@ readCabalDotConfig fp
 --    This is not allowed to span multiple lines.
 parseSeedFile :: FilePath -> IO (PkgSpecs, AllowNewer)
 parseSeedFile fp = do
-  ls <-  filter ( not . uselessLine )
+  ls <-  filter ( not . isCommentLine )
       .  map Text.strip
       .  Text.lines
      <$> Text.readFile fp
@@ -60,17 +89,18 @@ parseSeedFile fp = do
     (pkgs, allowNewers) = partitionEithers $ map parseSeedFileLine ls
   return ( Map.fromList pkgs, mconcat allowNewers )
   where
-    uselessLine :: Text -> Bool
-    uselessLine l
-        =  Text.null l
-        || Text.isPrefixOf "--" l
+
+isCommentLine :: Text -> Bool
+isCommentLine l
+    =  Text.null l
+    || Text.isPrefixOf "--" l
 
 parseSeedFileLine :: Text -> Either (PkgName, PkgSpec) AllowNewer
 parseSeedFileLine l
   | Just an <- Text.stripPrefix "allow-newer:" l
   = Right $ parseAllowNewer an
   | otherwise
-  = Left $ parsePkgSpec l
+  = Left $ parsePkgSpec "seed file" l
 
 parseAllowNewer :: Text -> AllowNewer
 parseAllowNewer l =
@@ -84,13 +114,13 @@ parseAllowNewer l =
       | otherwise
       = error $ "Invalid allow-newer syntax in seed file: " <> Text.unpack t
 
-parsePkgSpec :: Text -> (PkgName, PkgSpec)
-parsePkgSpec l =
+parsePkgSpec :: String -> Text -> (PkgName, PkgSpec)
+parsePkgSpec what l =
   case Text.words l of
     pkg:rest
       | validPackageName pkg
       -> ( PkgName pkg, parseSpec Map.empty rest )
-    _ -> error $ "Invalid package in seed file:" <> Text.unpack l
+    _ -> error $ "Invalid package in " <> what <> ": " <> Text.unpack l
   where
     parseSpec :: Map Text Bool -> [Text] -> PkgSpec
     parseSpec flags []

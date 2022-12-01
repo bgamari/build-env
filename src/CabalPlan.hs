@@ -187,7 +187,7 @@ instance FromJSON PlanUnit where
 newtype Constraints = Constraints Text
   deriving stock Show
 
--- | A mapping from a package name to its flags.
+-- | A mapping from a package name to its flags and constraints.
 type PkgSpecs = Strict.Map PkgName PkgSpec
 
 -- | A list of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
@@ -200,6 +200,21 @@ data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
                        , psFlags :: FlagSpec
                        }
   deriving stock Show
+
+-- | Left-biased union of two sets of packages,
+-- overriding flags and constraints of the second argument
+-- with those provided in the first argument.
+unionPkgSpecs :: PkgSpecs -> PkgSpecs -> PkgSpecs
+unionPkgSpecs = Map.unionWith unionPkgSpec
+
+-- | Left-biased union of package flags and constraints.
+unionPkgSpec :: PkgSpec -> PkgSpec -> PkgSpec
+unionPkgSpec (PkgSpec strongCts strongFlags) (PkgSpec weakCts weakFlags)
+  = PkgSpec cts (strongFlags <> weakFlags)
+    where
+      cts = case strongCts of
+        Nothing -> weakCts
+        _       -> strongCts
 
 -- | Binary data underlying a @cabal@ @plan.json@ file.
 newtype CabalPlanBinary = CabalPlanBinary Lazy.ByteString
