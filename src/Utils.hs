@@ -30,7 +30,7 @@ import System.IO.Temp
 
 -- build-env
 import Config
-  ( TempDirPermanence(..) )
+  ( Args, TempDirPermanence(..) )
 
 --------------------------------------------------------------------------------
 
@@ -40,7 +40,7 @@ import Config
 callProcessIn :: HasCallStack
               => FilePath -- ^ working directory
               -> FilePath -- ^ executable
-              -> [String] -- ^ arguments
+              -> Args     -- ^ arguments
               -> IO ()
 callProcessIn cwd prog args = do
     (_, _, _, ph) <- createProcess $ (proc prog args) { cwd = Just cwd }

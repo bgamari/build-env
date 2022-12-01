@@ -110,7 +110,7 @@ data Build
       -- ^ The output directory for the build.
     , configureArgs   :: TargetArgs
       -- ^ Arguments to pass to the @setup configure@ script.
-    , ghcPkgArgs      :: [String]
+    , ghcPkgArgs      :: Args
       -- ^ Arguments to pass to @ghc-pkg register@.
     }
   deriving stock Show

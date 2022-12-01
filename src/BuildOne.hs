@@ -63,8 +63,8 @@ buildPackage :: Verbosity
              -> FilePath  -- ^ (possibly temporary) build directory
              -> DestDir Canonicalised
                   -- ^ installation directory structure
-             -> [String]  -- ^ extra @Setup configure@ arguments for this unit
-             -> [String]  -- ^ extra @ghc-pkg register@ arguments
+             -> Args      -- ^ extra @Setup configure@ arguments for this unit
+             -> Args      -- ^ extra @ghc-pkg register@ arguments
              -> CabalPlan -- ^ build plan to follow (used to specify dependencies)
              -> ConfiguredUnit -- ^ the unit to build
              -> IO ()
@@ -73,8 +73,7 @@ buildPackage verbosity
              srcDir tempBuildDir ( DestDir { prefix, destDir, installDir } )
              userConfigureArgs userGhcPkgArgs
              plan unit = do
-    let target = buildTarget unit
-        printableName = Text.unpack $ componentName $ puComponentName unit
+    let printableName = Text.unpack $ componentName $ puComponentName unit
     normalMsg verbosity $ "Building " <> printableName
 
     -- Create the package database directories (if they don't already exist).
@@ -110,7 +109,7 @@ buildPackage verbosity
                         ] ++ flagsArg
                           ++ userConfigureArgs
                           ++ ( map (dependencyArg plan unit) $ Configured.puDepends unit )
-                        ++ [ target ]
+                        ++ [ buildTarget unit ]
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> printableName

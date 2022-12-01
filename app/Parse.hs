@@ -294,7 +294,7 @@ build = do
                                 <> metavar "ARG" )
       return $ TargetArgs $ Map.singleton AllPkgs args
 
-    optGhcPkgArgs :: Parser [String]
+    optGhcPkgArgs :: Parser Args
     optGhcPkgArgs =
       many $ option str (  long "ghc-pkg-arg"
                         <> help "Pass argument to 'ghc-pkg register'"

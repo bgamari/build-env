@@ -255,7 +255,7 @@ buildPlan :: TempDirPermanence
           -> BuildStrategy
           -> TargetArgs -- ^ extra @Setup configure@ arguments
                         -- (use this to specify haddock, hsc2hs, etc)
-          -> [String]   -- ^ extra @ghc-pkg@ arguments
+          -> Args       -- ^ extra @ghc-pkg@ arguments
           -> CabalPlan  -- ^ the build plan to execute
           -> IO ()
 buildPlan delTemp verbosity comp fetchDir0 destDir0

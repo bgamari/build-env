@@ -15,6 +15,8 @@ import qualified Data.Map.Strict as Map
   ( findWithDefault )
 
 -- build-env
+import Config
+  ( Args )
 import CabalPlan
   ( ComponentName, PkgName )
 
@@ -23,7 +25,7 @@ import CabalPlan
 -- | Arguments to pass for a specific target.
 newtype TargetArgs
   = TargetArgs
-  { targetArgs :: Map Target [String] }
+  { targetArgs :: Map Target Args }
   deriving stock Show
 
 -- | Targets:
@@ -53,7 +55,7 @@ data PkgTarget
 --
 -- The package/component-specific arguments are passed after the more general
 -- arguments, which allows overriding.
-lookupTargetArgs :: TargetArgs -> PkgName -> ComponentName -> [String]
+lookupTargetArgs :: TargetArgs -> PkgName -> ComponentName -> Args
 lookupTargetArgs ( TargetArgs allArgs ) pkg comp  =
   mconcat [ Map.findWithDefault [] AllPkgs allArgs
           , Map.findWithDefault [] (ThisPkg pkg AllComponents) allArgs

@@ -35,6 +35,9 @@ data Compiler =
            }
   deriving stock Show
 
+-- | A type synonym for command-line arguments.
+type Args = [String]
+
 -- | Verbosity level for the @build-env@ package.
 --
 -- The default verbosity level is 1.
