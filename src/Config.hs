@@ -20,7 +20,7 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>) )
+  ( (</>), dropDrive )
 
 --------------------------------------------------------------------------------
 
@@ -118,5 +118,11 @@ canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
 canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 }) = do
   prefix     <- canonicalizePath prefix0
   destDir    <- canonicalizePath destDir0
-  installDir <- canonicalizePath ( destDir0 </> prefix )
+  installDir <- canonicalizePath ( destDir0 </> dropDrive prefix )
+    -- We must use dropDrive here. Quoting from the documentation of (</>):
+    --
+    --   If the second path starts with a path separator or a drive letter,
+    --   then (</>) returns the second path.
+    --
+    -- We don't want that, as we *do* want to concatenate both paths.
   return $ DestDir { destDir, prefix, installDir }

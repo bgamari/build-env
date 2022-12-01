@@ -260,15 +260,22 @@ buildPlan :: TempDirPermanence
 buildPlan delTemp verbosity comp fetchDir0 destDir0 buildStrat configureArgs cabalPlan
   = do
     fetchDir <- canonicalizePath fetchDir0
-    destDir@( DestDir { installDir })
+    dest@( DestDir { installDir, prefix, destDir } )
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
     withTempDir delTemp "build" \ buildDir -> do
+
+      verboseMsg verbosity $
+        unlines [ "       prefix: " <> prefix
+                , "      destDir: " <> destDir
+                , "   installDir: " <> installDir
+                , "  tmpBuildDir: " <> buildDir ]
+
       let buildPkg :: ConfiguredUnit -> IO ()
           buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
             let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
                 pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
-            buildPackage verbosity comp srcDir buildDir destDir pkgConfigureArgs cabalPlan pu
+            buildPackage verbosity comp srcDir buildDir dest pkgConfigureArgs cabalPlan pu
 
       if doAsync buildStrat
       then do unitAsyncs <- mfix \ unitAsyncs ->

@@ -40,11 +40,7 @@ main = do
       case buildFetch of
         Prefetched -> return ()
         Fetch      -> doFetch verbosity cabal fetchDir plan
-      normalMsg verbosity $
-        mconcat
-          [ "Building and registering packages\n"
-          , "  dest-dir: '", destDir buildDestDir, "'\n"
-          , "    prefix: '", prefix  buildDestDir , "'" ]
+      normalMsg verbosity "Building and registering packages"
       buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy configureArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
