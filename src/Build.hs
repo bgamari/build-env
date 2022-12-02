@@ -195,31 +195,12 @@ data CabalFilesContents
 -- | Fetch the sources of a 'CabalPlan', calling @cabal unpack@ on each
 -- package and putting it into the correspondingly named and versioned
 -- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
---
--- Note: this function will fail if a fetched source subdirectory
--- already exists for one of packages in the plan.
 fetchPlan :: Verbosity
           -> Cabal
-          -> FilePath    -- ^ directory in which to put the sources
-          -> NewOrUpdate -- ^ whether to create a new directory or
-                         -- use an existing directory
+          -> FilePath  -- ^ directory in which to put the sources
           -> CabalPlan
           -> IO ()
-fetchPlan verbosity cabal fetchDir0 newOrUpd cabalPlan = do
-    fetchDir <- canonicalizePath fetchDir0
-    fetchDirExists <- doesDirectoryExist fetchDir
-    case newOrUpd of
-      New | fetchDirExists ->
-        error $ unlines
-          [ "Fetch directory already exists."
-          , "Use --update to update an existing directory."
-          , "Fetch directory: " <> fetchDir ]
-      Update | not fetchDirExists ->
-        error $ unlines
-          [ "Fetch directory must already exist when using --update."
-          , "Fetch directory: " <> fetchDir ]
-      _ -> return ()
-    createDirectoryIfMissing True fetchDir
+fetchPlan verbosity cabal fetchDir cabalPlan =
     for_ pkgs \ (pkgNm, pkgVer) -> do
       let nameVersion = Text.unpack $ pkgNameVersion pkgNm pkgVer
       pkgDirExists <- doesDirectoryExist (fetchDir </> nameVersion)

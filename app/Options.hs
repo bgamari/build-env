@@ -34,7 +34,7 @@ data Mode
   -- | Fetch sources from a build plan.
   | FetchMode
       FetchDescription -- ^ what to fetch
-      NewOrUpdate      -- ^ whether to create a new directory
+      NewOrExisting    -- ^ whether to create a new directory
                        -- or add to an existing one
   -- | Build and register packages from fetched sources.
   | BuildMode Build
@@ -93,10 +93,18 @@ data Plan
 -- | Whether to fetch the sources or to use prefetched sources.
 data Fetch
   -- | Fetch the sources.
-  = Fetch NewOrUpdate
+  = Fetch NewOrExisting
   -- | The sources have already been fetched.
   | Prefetched
-  deriving stock Show
+  deriving stock ( Show, Eq )
+
+-- | Whether to create a new directory or use an existing directory.
+data NewOrExisting
+  -- | Create a new directory.
+  = New
+  -- | Update an existing directory.
+  | Existing
+  deriving stock ( Show, Eq )
 
 -- | Information needed to perform a build.
 data Build

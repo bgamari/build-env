@@ -8,6 +8,11 @@ import qualified Data.ByteString.Lazy as BSL
 import qualified Data.Map as Map
   ( keys, union )
 
+-- directory
+import System.Directory
+  ( canonicalizePath, createDirectoryIfMissing
+  , doesDirectoryExist )
+
 -- build-env
 import Build
 import CabalPlan
@@ -115,8 +120,22 @@ getPlan delTemp verbosity comp cabal planMode = do
    return $ parsePlanBinary planBinary
 
 -- | Fetch all packages in a cabal build plan.
-doFetch :: Verbosity -> Cabal -> FilePath -> NewOrUpdate -> CabalPlan -> IO ()
-doFetch verbosity cabal fetchDir newOrUpd plan = do
+doFetch :: Verbosity -> Cabal -> FilePath -> NewOrExisting -> CabalPlan -> IO ()
+doFetch verbosity cabal fetchDir0 newOrUpd plan = do
+  fetchDir       <- canonicalizePath fetchDir0
+  fetchDirExists <- doesDirectoryExist fetchDir
+  case newOrUpd of
+    New | fetchDirExists ->
+      error $ unlines
+        [ "Fetch directory already exists."
+        , "Use --update to update an existing directory."
+        , "Fetch directory: " <> fetchDir ]
+    Existing | not fetchDirExists ->
+      error $ unlines
+        [ "Fetch directory must already exist when using --update."
+        , "Fetch directory: " <> fetchDir ]
+    _ -> return ()
+  createDirectoryIfMissing True fetchDir
   normalMsg verbosity $
     "Fetching sources from build plan into directory '" <> fetchDir <> "'"
-  fetchPlan verbosity cabal fetchDir newOrUpd plan
+  fetchPlan verbosity cabal fetchDir plan

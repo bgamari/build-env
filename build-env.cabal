@@ -13,6 +13,10 @@ common common
           >= 0.10 && < 0.12
       , containers
          ^>= 0.6
+      , directory
+         ^>= 1.3
+      , filepath
+         ^>= 1.4
       , text
           >= 1.2 && < 2.1
 
@@ -63,10 +67,6 @@ library
          ^>= 2.2
       , aeson
           >= 1.5 && < 2.2
-      , directory
-         ^>= 1.3
-      , filepath
-         ^>= 1.4
       , process
          ^>= 1.6
       , temporary

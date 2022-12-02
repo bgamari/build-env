@@ -94,7 +94,7 @@ optMode =
         info ( PlanMode  <$> planInputs Planning <*> optOutput )
         ( progDesc "Compute a build plan from a collection of seeds" )
     , command "fetch" $
-        info ( FetchMode <$> fetchDescription Fetching <*> newOrUpdate )
+        info ( FetchMode <$> fetchDescription Fetching <*> newOrExisting )
         ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
@@ -252,9 +252,9 @@ fetchDescription modeDesc = do
       _        -> "OUTDIR"
 
 -- | Parse whether to create a new fetch directory or update an existing one.
-newOrUpdate :: Parser NewOrUpdate
-newOrUpdate =
-    bool New Update <$>
+newOrExisting :: Parser NewOrExisting
+newOrExisting =
+    bool New Existing <$>
       switch (  long "update"
              <> help "Update existing fetched sources directory" )
 
@@ -283,7 +283,7 @@ build = do
 
     optFetch :: Parser Fetch
     optFetch =
-      prefetched <|> ( Fetch <$> newOrUpdate )
+      prefetched <|> ( Fetch <$> newOrExisting )
 
     prefetched :: Parser Fetch
     prefetched =
