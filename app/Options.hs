@@ -32,7 +32,10 @@ data Mode
        -- ^ Where to output the @plan.json@ file.
      }
   -- | Fetch sources from a build plan.
-  | FetchMode FetchDescription
+  | FetchMode
+      FetchDescription -- ^ what to fetch
+      NewOrUpdate      -- ^ whether to create a new directory
+                       -- or add to an existing one
   -- | Build and register packages from fetched sources.
   | BuildMode Build
   deriving stock Show
@@ -90,7 +93,7 @@ data Plan
 -- | Whether to fetch the sources or to use prefetched sources.
 data Fetch
   -- | Fetch the sources.
-  = Fetch
+  = Fetch NewOrUpdate
   -- | The sources have already been fetched.
   | Prefetched
   deriving stock Show

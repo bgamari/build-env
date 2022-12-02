@@ -86,6 +86,14 @@ data TempDirPermanence
   | Don'tDeleteTempDirs
   deriving stock Show
 
+-- | Whether to create a new directory or use an existing directory.
+data NewOrUpdate
+  -- | Create a new directory.
+  = New
+  -- | Update an existing directory.
+  | Update
+  deriving stock Show
+
 -- | The directory structure relevant to installation: @dest-dir@ and @prefix@.
 --
 -- If the type parameter is 'Raw', filepaths can be relative.

@@ -64,7 +64,8 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( canonicalizePath, createDirectoryIfMissing )
+  ( canonicalizePath, createDirectoryIfMissing
+  , doesDirectoryExist )
 
 -- filepath
 import System.FilePath
@@ -192,14 +193,32 @@ data CabalFilesContents
 -- already exists for one of packages in the plan.
 fetchPlan :: Verbosity
           -> Cabal
-          -> FilePath -- ^ directory in which to put the sources
-                      -- (will be created if missing)
+          -> FilePath    -- ^ directory in which to put the sources
+          -> NewOrUpdate -- ^ whether to create a new directory or
+                         -- use an existing directory
           -> CabalPlan
           -> IO ()
-fetchPlan verbosity cabal fetchDir0 cabalPlan = do
+fetchPlan verbosity cabal fetchDir0 newOrUpd cabalPlan = do
     fetchDir <- canonicalizePath fetchDir0
+    fetchDirExists <- doesDirectoryExist fetchDir
+    case newOrUpd of
+      New | fetchDirExists ->
+        error $ unlines
+          [ "Fetch directory already exists."
+          , "Use --update to update an existing directory."
+          , "Fetch directory: " <> fetchDir ]
+      Update | not fetchDirExists ->
+        error $ unlines
+          [ "Fetch directory must already exist when using --update."
+          , "Fetch directory: " <> fetchDir ]
+      _ -> return ()
     createDirectoryIfMissing True fetchDir
-    mapM_ (uncurry $ cabalFetch verbosity cabal fetchDir) pkgs
+    for_ pkgs \ (pkgNm, pkgVer) -> do
+      let nameVersion = Text.unpack $ pkgNameVersion pkgNm pkgVer
+      pkgDirExists <- doesDirectoryExist (fetchDir </> nameVersion)
+      if   pkgDirExists
+      then normalMsg verbosity $ "NOT fetching " <> nameVersion
+      else cabalFetch verbosity cabal fetchDir nameVersion
   where
     pkgs :: Set (PkgName, Version)
     pkgs = Set.fromList
@@ -216,16 +235,13 @@ fetchPlan verbosity cabal fetchDir0 cabalPlan = do
       _ -> Nothing
 
 -- | Call @cabal get@ to fetch a single package from Hackage.
-cabalFetch :: Verbosity -> Cabal -> FilePath -> PkgName -> Version -> IO ()
-cabalFetch verbosity cabal root nm ver = do
-    normalMsg verbosity $
-      "Fetching " <> nameVersion
+cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
+cabalFetch verbosity cabal root pkgNmVer = do
+    normalMsg verbosity $ "Fetching " <> pkgNmVer
     callProcessIn root (cabalPath cabal)
       [ "get"
-      , nameVersion
+      , pkgNmVer
       , cabalVerbosity verbosity ]
-  where
-    nameVersion = Text.unpack $ pkgNameVersion nm ver
 
 -- | Sort the units in a 'CabalPlan' in dependency order.
 sortPlan :: CabalPlan -> [ConfiguredUnit]

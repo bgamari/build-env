@@ -30,16 +30,16 @@ main = do
       normalMsg verbosity $
         "Writing build plan to '" <> planOutput <> "'"
       BSL.writeFile planOutput planBinary
-    FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) -> do
+    FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
-      doFetch verbosity cabal fetchDir plan
+      doFetch verbosity cabal fetchDir newOrUpd plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildDestDir
                       , configureArgs, ghcPkgArgs } ) -> do
       plan <- getPlan delTemp verbosity cabal fetchInputPlan
       case buildFetch of
-        Prefetched -> return ()
-        Fetch      -> doFetch verbosity cabal fetchDir plan
+        Prefetched     -> return ()
+        Fetch newOrUpd -> doFetch verbosity cabal fetchDir newOrUpd plan
       normalMsg verbosity "Building and registering packages"
       buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy
         configureArgs ghcPkgArgs
@@ -114,8 +114,8 @@ getPlan delTemp verbosity cabal planMode = do
    return $ parsePlanBinary planBinary
 
 -- | Fetch all packages in a cabal build plan.
-doFetch :: Verbosity -> Cabal -> FilePath -> CabalPlan -> IO ()
-doFetch verbosity cabal fetchDir plan = do
+doFetch :: Verbosity -> Cabal -> FilePath -> NewOrUpdate -> CabalPlan -> IO ()
+doFetch verbosity cabal fetchDir newOrUpd plan = do
   normalMsg verbosity $
     "Fetching sources from build plan into directory '" <> fetchDir <> "'"
-  fetchPlan verbosity cabal fetchDir plan
+  fetchPlan verbosity cabal fetchDir newOrUpd plan

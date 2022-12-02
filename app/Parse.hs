@@ -85,7 +85,7 @@ optMode =
         info ( PlanMode  <$> planInputs Planning <*> optOutput )
         ( progDesc "Compute a build plan from a collection of seeds" )
     , command "fetch" $
-        info ( FetchMode <$> fetchDescription Fetching )
+        info ( FetchMode <$> fetchDescription Fetching <*> newOrUpdate )
         ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
@@ -242,6 +242,13 @@ fetchDescription modeDesc = do
       Building -> "INDIR"
       _        -> "OUTDIR"
 
+-- | Parse whether to create a new fetch directory or update an existing one.
+newOrUpdate :: Parser NewOrUpdate
+newOrUpdate =
+    bool New Update <$>
+      switch (  long "update"
+             <> help "Update existing fetched sources directory" )
+
 -- | Parse the options for the @build@ command.
 build :: Parser Build
 build = do
@@ -267,9 +274,13 @@ build = do
 
     optFetch :: Parser Fetch
     optFetch =
-      bool Fetch Prefetched <$>
-        switch (  long "prefetched"
-               <> help "Use prefetched sources instead of fetching from Hackage" )
+      prefetched <|> ( Fetch <$> newOrUpdate )
+
+    prefetched :: Parser Fetch
+    prefetched =
+      flag' Prefetched
+        (  long "prefetched"
+        <> help "Use prefetched sources instead of fetching from Hackage" )
 
     optDestDir :: Parser (DestDir Raw)
     optDestDir = do
