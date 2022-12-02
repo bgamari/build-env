@@ -109,19 +109,25 @@ dummyUnitId = UnitId $ dummyPackageName <> "-0-inplace"
 -- a 'CabalPlan'.
 computePlan :: TempDirPermanence
             -> Verbosity
+            -> Compiler
             -> Cabal
             -> CabalFilesContents
             -> IO CabalPlanBinary
-computePlan delTemp verbosity cabal ( CabalFilesContents { cabalContents, projectContents } ) =
+computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, projectContents } ) =
   withTempDir delTemp "build" \ dir -> do
     verboseMsg verbosity $ "Computing plan in build directory " ++ dir
     Text.writeFile (dir </> "cabal" <.> "project") projectContents
     Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents
-    callProcessIn dir (cabalPath cabal) $
-      globalCabalArgs cabal ++
-      [ "build"
-      , "--dry-run"
-      , cabalVerbosity verbosity ]
+    let cabalBuildArgs =
+          globalCabalArgs cabal ++
+            [ "build"
+            , "--dry-run"
+            , "--with-compiler", ghcPath comp
+            , cabalVerbosity verbosity ]
+    debugMsg verbosity $
+      unlines $ "cabal" : map ("  " <>) cabalBuildArgs
+    callProcessIn dir (cabalPath cabal) cabalBuildArgs
+
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
 

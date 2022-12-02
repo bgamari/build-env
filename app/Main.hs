@@ -26,17 +26,17 @@ main = do
   case mode of
     PlanMode { planModeInputs, planOutput } -> do
       CabalPlanBinary planBinary <-
-        computePlanFromInputs delTemp verbosity cabal planModeInputs
+        computePlanFromInputs delTemp verbosity compiler cabal planModeInputs
       normalMsg verbosity $
         "Writing build plan to '" <> planOutput <> "'"
       BSL.writeFile planOutput planBinary
     FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
-      plan <- getPlan delTemp verbosity cabal fetchInputPlan
+      plan <- getPlan delTemp verbosity compiler cabal fetchInputPlan
       doFetch verbosity cabal fetchDir newOrUpd plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildDestDir
                       , configureArgs, ghcPkgArgs } ) -> do
-      plan <- getPlan delTemp verbosity cabal fetchInputPlan
+      plan <- getPlan delTemp verbosity compiler cabal fetchInputPlan
       case buildFetch of
         Prefetched     -> return ()
         Fetch newOrUpd -> doFetch verbosity cabal fetchDir newOrUpd plan
@@ -90,22 +90,23 @@ parsePlanPackages verbosity (FromFile fp) =
 -- @pkg.cabal@ and @cabal.project@ files.
 computePlanFromInputs :: TempDirPermanence
                       -> Verbosity
+                      -> Compiler
                       -> Cabal
                       -> PlanInputs
                       -> IO CabalPlanBinary
-computePlanFromInputs delTemp verbosity cabal inputs
+computePlanFromInputs delTemp verbosity comp cabal inputs
     = do cabalFileContents <- parsePlanInputs verbosity inputs
          normalMsg verbosity "Computing build plan"
-         computePlan delTemp verbosity cabal cabalFileContents
+         computePlan delTemp verbosity comp cabal cabalFileContents
 
 -- | Retrieve a cabal build plan, either by computing it or using
 -- a pre-existing @plan.json@ file.
-getPlan :: TempDirPermanence -> Verbosity -> Cabal -> Plan -> IO CabalPlan
-getPlan delTemp verbosity cabal planMode = do
+getPlan :: TempDirPermanence -> Verbosity -> Compiler -> Cabal -> Plan -> IO CabalPlan
+getPlan delTemp verbosity comp cabal planMode = do
    planBinary <-
      case planMode of
        ComputePlan planInputs   ->
-        computePlanFromInputs delTemp verbosity cabal planInputs
+        computePlanFromInputs delTemp verbosity comp cabal planInputs
        UsePlan { planJSONPath } ->
          do
            normalMsg verbosity $
