@@ -56,8 +56,17 @@ optCompiler =
 
 -- | Parse @cabal@ path.
 optCabal :: Parser Cabal
-optCabal =
-  Cabal <$> option str (long "cabal" <> value "cabal" <> help "'cabal' executable path" <> metavar "CABAL")
+optCabal = do
+  cabalPath <-
+    option str
+      (  long "cabal" <> value "cabal"
+      <> help "'cabal' executable path"
+      <> metavar "CABAL" )
+  globalCabalArgs <-
+    many $ option str (  long "cabal-arg"
+                      <> help "Pass argument to 'cabal'"
+                      <> metavar "ARG" )
+  return $ Cabal { cabalPath, globalCabalArgs }
 
 -- | Parse verbosity.
 optVerbosity :: Parser Verbosity

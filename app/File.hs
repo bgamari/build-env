@@ -66,7 +66,7 @@ parseCabalDotConfigPkgs fp = do
 parseCabalDotConfigLine :: Text -> (PkgName, PkgSpec)
 parseCabalDotConfigLine
   = parsePkgSpec "'cabal.config' file"
-  . Text.dropAround ((==) ',')
+  . Text.dropAround (',' ==)
       -- drop commas
 
 -- | Parse a seed file. Each line must either be:
@@ -88,7 +88,6 @@ parseSeedFile fp = do
   let
     (pkgs, allowNewers) = partitionEithers $ map parseSeedFileLine ls
   return ( Map.fromList pkgs, mconcat allowNewers )
-  where
 
 isCommentLine :: Text -> Bool
 isCommentLine l

@@ -25,7 +25,11 @@ import System.FilePath
 --------------------------------------------------------------------------------
 
 -- | Path to the @cabal@ executable.
-data Cabal = Cabal { cabalPath :: FilePath }
+data Cabal = Cabal { cabalPath :: FilePath
+                   , globalCabalArgs :: Args
+                     -- ^ Arguments to pass to all @cabal@ invocations,
+                     -- before any @cabal@ command@.
+                   }
   deriving stock Show
 
 -- | Paths to the @ghc@ and @ghc-pkg@ executables.

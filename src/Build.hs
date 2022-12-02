@@ -117,7 +117,8 @@ computePlan delTemp verbosity cabal ( CabalFilesContents { cabalContents, projec
     verboseMsg verbosity $ "Computing plan in build directory " ++ dir
     Text.writeFile (dir </> "cabal" <.> "project") projectContents
     Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents
-    callProcessIn dir (cabalPath cabal)
+    callProcessIn dir (cabalPath cabal) $
+      globalCabalArgs cabal ++
       [ "build"
       , "--dry-run"
       , cabalVerbosity verbosity ]
@@ -238,7 +239,8 @@ fetchPlan verbosity cabal fetchDir0 newOrUpd cabalPlan = do
 cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
 cabalFetch verbosity cabal root pkgNmVer = do
     normalMsg verbosity $ "Fetching " <> pkgNmVer
-    callProcessIn root (cabalPath cabal)
+    callProcessIn root (cabalPath cabal) $
+      globalCabalArgs cabal ++
       [ "get"
       , pkgNmVer
       , cabalVerbosity verbosity ]
@@ -264,14 +266,13 @@ sortPlan plan =
 buildPlan :: TempDirPermanence
           -> Verbosity
           -> Compiler
-          -> FilePath   -- ^ fetched sources directory (input)
-          -> DestDir Raw
-               -- ^ installation directory structure (output)
+          -> FilePath    -- ^ fetched sources directory (input)
+          -> DestDir Raw -- ^ installation directory structure (output)
           -> BuildStrategy
-          -> TargetArgs -- ^ extra @Setup configure@ arguments
-                        -- (use this to specify haddock, hsc2hs, etc)
-          -> Args       -- ^ extra @ghc-pkg@ arguments
-          -> CabalPlan  -- ^ the build plan to execute
+          -> TargetArgs  -- ^ extra @Setup configure@ arguments
+                         -- (use this to specify haddock, hsc2hs, etc)
+          -> Args        -- ^ extra @ghc-pkg@ arguments
+          -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
 buildPlan delTemp verbosity comp fetchDir0 destDir0
           buildStrat
