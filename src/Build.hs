@@ -126,7 +126,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
       unlines $ "cabal" : map ("  " <>) cabalBuildArgs
-    callProcessIn dir (cabalPath cabal) cabalBuildArgs
+    callProcessIn dir [] (cabalPath cabal) cabalBuildArgs
 
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
@@ -234,7 +234,7 @@ fetchPlan verbosity cabal fetchDir cabalPlan =
 cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
 cabalFetch verbosity cabal root pkgNmVer = do
     normalMsg verbosity $ "Fetching " <> pkgNmVer
-    callProcessIn root (cabalPath cabal) $
+    callProcessIn root [] (cabalPath cabal) $
       globalCabalArgs cabal ++
       [ "get"
       , pkgNmVer

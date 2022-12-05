@@ -93,7 +93,7 @@ buildPackage verbosity
                     ] ++ map unitIdArg (puSetupDepends unit)
     verboseMsg verbosity $
       "Compiling Setup.hs for " <> printableName
-    callProcessIn "." ghcPath setupArgs
+    callProcessIn "." [] ghcPath setupArgs
 
     -- Configure
     let flagsArg = case puFlags unit of
@@ -113,22 +113,25 @@ buildPackage verbosity
                           ++ map ( dependencyArg plan unit )
                               ( Configured.puDepends unit )
                         ++ [ buildTarget unit ]
+        binDir = installDir </> "bin"
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> printableName
     debugMsg verbosity $
       "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
-    callProcessIn srcDir setupExe $ "configure" : configureArgs
+    callProcessIn srcDir [binDir] setupExe $ "configure" : configureArgs
+      -- Add the output binary directory to PATH, to satisfy executable
+      -- dependencies.
 
     -- Build
     verboseMsg verbosity $
       "Building " <> printableName
-    callProcessIn srcDir setupExe ["build", setupVerbosity verbosity]
+    callProcessIn srcDir [] setupExe ["build", setupVerbosity verbosity]
 
     -- Copy
     verboseMsg verbosity $
       "Copying " <> printableName
-    callProcessIn srcDir setupExe
+    callProcessIn srcDir [] setupExe
       [ "copy", setupVerbosity verbosity
       , "--destdir", destDir ]
 
@@ -149,7 +152,7 @@ buildPackage verbosity
                     , pkgDbDir ]
 
           -- Setup register
-          callProcessIn srcDir setupExe $
+          callProcessIn srcDir [] setupExe $
             [ "register", setupVerbosity verbosity
             , "--gen-pkg-config=" ++ pkgRegDir
             ] ++ extraSetupArgs
@@ -161,7 +164,7 @@ buildPackage verbosity
               then map (pkgRegDir </>) <$> listDirectory pkgRegDir
               else return [pkgRegDir]
           let register regFile =
-                callProcessIn "." ghcPkgPath $
+                callProcessIn "." [] ghcPkgPath $
                   [ "register"
                   , ghcPkgVerbosity verbosity
                   , "--package-db", pkgDbDir
