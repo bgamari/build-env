@@ -43,7 +43,9 @@ data Mode
 -- | How to specify which packages to build/constrain.
 data PackageData
   -- | Explicit description of packages.
-  = Explicit PkgSpecs
+  = Explicit
+      PkgSpecs -- ^ libraries
+      PkgSpecs -- ^ executables
   -- | Parse package information from the given file.
   --
   -- The file contents will be interpreted as follows:

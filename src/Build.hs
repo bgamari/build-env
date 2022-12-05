@@ -170,8 +170,10 @@ cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
 -- the specified packages (without any constraints).
 --
 -- The corresponding package Id is 'dummyPackageId'.
-cabalFileContentsFromPackages :: [PkgName] -> Text
-cabalFileContentsFromPackages pkgs =
+cabalFileContentsFromPackages :: [PkgName] -- ^ libraries
+                              -> [PkgName] -- ^ executables
+                              -> Text
+cabalFileContentsFromPackages libs exes =
   Text.unlines
     [ "cabal-version: 2.4"
     , "name: " <> dummyPackageName
@@ -179,8 +181,14 @@ cabalFileContentsFromPackages pkgs =
     , "library"
     , "  build-depends:"
     ] <> Text.intercalate ",\n"
-         [ "    " <> unPkgName nm
-         | nm <- pkgs ]
+         [ "    " <> nm
+         | PkgName nm <- libs ]
+     <> if null exes
+        then ""
+        else "\n  build-tool-depends:\n"
+          <> Text.intercalate ",\n"
+              [ "    " <> nm <> ":" <> nm
+              | PkgName nm <- exes ]
 
 -- | The file contents of the cabal files of a cabal project;
 -- @pkg.cabal@ and @cabal.project@.
@@ -286,6 +294,14 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
               pkgConfigureArgs ghcPkgArgs
               cabalPlan pu
 
+      debugMsg verbosity $
+        "Units to build: " <>
+          unlines
+            ( map
+              ( Text.unpack . cabalComponent . puComponentName )
+              unitsToBuild
+            )
+
       if doAsync buildStrat
       then do unitAsyncs <- mfix \ unitAsyncs ->
                 let doPkgAsync :: ConfiguredUnit -> IO ()
@@ -304,7 +320,7 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
     unitsToBuild :: [ConfiguredUnit]
     unitsToBuild
       = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyUnitId)
-      $ if doTopoSort buildStrat
+      $ if   doTopoSort buildStrat
         then sortPlan cabalPlan
         else mapMaybe configuredUnitMaybe $ planUnits cabalPlan
 

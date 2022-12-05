@@ -5,8 +5,6 @@ module File
 -- base
 import Data.Char
   ( isSpace )
-import Data.Either
-  ( partitionEithers )
 
 -- containers
 import Data.Map
@@ -77,29 +75,36 @@ parseCabalDotConfigLine
 --    When both are present, flags must precede constraints.
 --    Constraints must use valid @cabal@ constraint syntax.
 --
+--    If the package is an executable, it should start with @exe:@.
+--
 --  - An allow-newer specification, e.g. @allow-newer: pkg1:pkg2,*:base,...@.
 --    This is not allowed to span multiple lines.
-parseSeedFile :: FilePath -> IO (PkgSpecs, AllowNewer)
+--
+-- Returns @(libs, exes, allowNewer)@.
+parseSeedFile :: FilePath -> IO (PkgSpecs, PkgSpecs, AllowNewer)
 parseSeedFile fp = do
   ls <-  filter ( not . isCommentLine )
       .  map Text.strip
       .  Text.lines
      <$> Text.readFile fp
-  let
-    (pkgs, allowNewers) = partitionEithers $ map parseSeedFileLine ls
-  return ( Map.fromList pkgs, mconcat allowNewers )
+  return $ go Map.empty Map.empty mempty ls
+
+  where
+
+    go libs exes ans [] = (libs, exes, ans)
+    go libs exes ans (l:ls)
+      | Just an <- Text.stripPrefix "allow-newer:" l
+      = go libs exes (ans <> parseAllowNewer an) ls
+      | Just exe <- Text.stripPrefix "exe:" l
+      , let (pkg, spec) = parsePkgSpec "seed file" exe
+      = go libs (Map.insert pkg spec exes) ans ls
+      | let (pkg, spec) = parsePkgSpec "seed file" l
+      = go (Map.insert pkg spec libs) exes ans ls
 
 isCommentLine :: Text -> Bool
 isCommentLine l
     =  Text.null l
     || Text.isPrefixOf "--" l
-
-parseSeedFileLine :: Text -> Either (PkgName, PkgSpec) AllowNewer
-parseSeedFileLine l
-  | Just an <- Text.stripPrefix "allow-newer:" l
-  = Right $ parseAllowNewer an
-  | otherwise
-  = Left $ parsePkgSpec "seed file" l
 
 parseAllowNewer :: Text -> AllowNewer
 parseAllowNewer l =

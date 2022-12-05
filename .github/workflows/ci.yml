@@ -31,7 +31,7 @@ jobs:
     - name: "Build executable"
       run: cabal build exe:build-env
 
-    - name: "Command-line: plan, fetch and build lens"
+    - name: "Test 1: plan, fetch and build lens (command line)"
       working-directory: ./tests/test1
       run: |
         cabal run exe:build-env -- plan lens -p plan.json -v2
@@ -39,8 +39,13 @@ jobs:
         cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" --no-async -v2
         ghc-pkg --package-db=install/package.conf field lens id
 
-    - name: "Build aeson using a seed file and cabal.config"
+    - name: "Test 2: build aeson (seed file & cabal.config)"
       working-directory: ./tests/test2
       run: |
         cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --no-async -v2
         ghc-pkg --package-db=install/package.conf field aeson id
+
+    - name: "Test 3: build c2hs executable (command line)"
+      working-directory: ./tests/test3
+      run: |
+        cabal run exe:build-env -- build exe:c2hs -f sources -o install --no-async -v2

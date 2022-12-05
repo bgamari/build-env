@@ -132,40 +132,44 @@ buildPackage verbosity
       [ "copy", setupVerbosity verbosity
       , "--destdir", destDir ]
 
-    -- Register (in both the local and final package databases)
-    -- See Note [Using two package databases].
-    let pkgRegsFile = "pkg-reg.conf"
-        pkgRegDir = srcDir </> pkgRegsFile
-        dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
-               , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
-    for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) -> do
+    -- Register
+    case cuComponentType unit of
+      Lib -> do
+        -- Register library (in both the local and final package databases)
+        -- See Note [Using two package databases].
+        let pkgRegsFile = "pkg-reg.conf"
+            pkgRegDir = srcDir </> pkgRegsFile
+            dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
+                   , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
+        for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) -> do
 
-      verboseMsg verbosity $
-        mconcat [ "Registering ", printableName, " in "
-                , desc, " package database at:\n  "
-                , pkgDbDir ]
+          verboseMsg verbosity $
+            mconcat [ "Registering ", printableName, " in "
+                    , desc, " package database at:\n  "
+                    , pkgDbDir ]
 
-      -- Setup register
-      callProcessIn srcDir setupExe $
-        [ "register", setupVerbosity verbosity
-        , "--gen-pkg-config=" ++ pkgRegDir
-        ] ++ extraSetupArgs
+          -- Setup register
+          callProcessIn srcDir setupExe $
+            [ "register", setupVerbosity verbosity
+            , "--gen-pkg-config=" ++ pkgRegDir
+            ] ++ extraSetupArgs
 
-      -- ghc-pkg register
-      is_dir <- doesDirectoryExist pkgRegDir
-      regFiles <-
-          if is_dir
-          then map (pkgRegDir </>) <$> listDirectory pkgRegDir
-          else return [pkgRegDir]
-      let register regFile =
-            callProcessIn "." ghcPkgPath $
-              [ "register"
-              , ghcPkgVerbosity verbosity
-              , "--package-db", pkgDbDir
-              , regFile ]
-              ++ extraPkgArgs
-      mapM_ register regFiles
+          -- ghc-pkg register
+          is_dir <- doesDirectoryExist pkgRegDir
+          regFiles <-
+              if is_dir
+              then map (pkgRegDir </>) <$> listDirectory pkgRegDir
+              else return [pkgRegDir]
+          let register regFile =
+                callProcessIn "." ghcPkgPath $
+                  [ "register"
+                  , ghcPkgVerbosity verbosity
+                  , "--package-db", pkgDbDir
+                  , regFile ]
+                  ++ extraPkgArgs
+          mapM_ register regFiles
 
+      _   -> return ()
 
     normalMsg verbosity $ "Installed " <> printableName
 
@@ -184,8 +188,8 @@ unitIdArg (UnitId unitId) = "-package-id " ++ Text.unpack unitId
 
 -- | The target to configure and build.
 buildTarget :: ConfiguredUnit -> String
-buildTarget ( ConfiguredUnit { puComponentName = ComponentName ty nm } )
-  = Text.unpack (ty <> ":" <> nm)
+buildTarget ( ConfiguredUnit { puComponentName = comp } )
+  = Text.unpack $ cabalComponent comp
 
 -- | The argument @--dependency=PKG:COMP=UNIT_ID@.
 --

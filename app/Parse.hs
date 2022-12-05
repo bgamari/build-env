@@ -7,6 +7,8 @@ module Parse ( options, runOptionsParser ) where
 -- base
 import Data.Bool
   ( bool )
+import Data.Either
+  ( partitionEithers )
 
 -- containers
 import qualified Data.Map.Strict as Map
@@ -19,7 +21,7 @@ import Options.Applicative
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( pack )
+  ( pack, splitOn, unpack )
 
 -- build-env
 import CabalPlan
@@ -188,26 +190,32 @@ splitOn c = go
 dependencies :: ModeDescription -> Parser PackageData
 dependencies modeDesc
   =   ( FromFile <$> seeds )
-  <|> ( Explicit <$> pkgs )
+  <|> explicitPkgs
 
   where
 
     seeds :: Parser FilePath
     seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
 
-    pkgs :: Parser PkgSpecs
-    pkgs = Map.fromList <$>
-           some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
-
-    pkgSpec :: ReadM (PkgName, PkgSpec)
-    pkgSpec = do
-      pkgName <- str
+    explicitPkgs :: Parser PackageData
+    explicitPkgs = do
+      pkgs <- some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
       return $
-        ( PkgName pkgName
-        , PkgSpec Nothing mempty
-            -- TODO: flags & constraints not yet supported by
-            -- the command-line interface; use a SEED file instead.
-        )
+        let (libs, exes) = partitionEithers pkgs
+        in  Explicit (Map.fromList libs) (Map.fromList exes)
+
+    pkgSpec :: ReadM (Either (PkgName, PkgSpec) (PkgName, PkgSpec))
+    pkgSpec = do
+      pkg <- str
+      return $
+        let spec = PkgSpec Nothing mempty
+                   -- TODO: flags & constraints not yet supported by
+                   -- the command-line interface; use a SEED file instead.
+        in case Text.splitOn ":" pkg of
+            "exe":pkgNm:[] -> Right ( PkgName pkgNm, spec )
+            "lib":pkgNm:[] -> Left  ( PkgName pkgNm, spec )
+            _:_:_          -> error $ "Cannot parse package name: " <> Text.unpack pkg
+            _              -> Left  ( PkgName pkg, spec )
 
     pkgsHelp, seedsHelp :: String
     (pkgsHelp, seedsHelp) = (what <> " seed packages", what <> " seed file")

@@ -85,14 +85,48 @@ showFlagSpec (FlagSpec fs) =
 flagSpecIsEmpty :: FlagSpec -> Bool
 flagSpecIsEmpty (FlagSpec fs) = null fs
 
+-- | The type of a component, e.g. library, executable, test-suite...
+data ComponentType
+  = Lib
+  | FLib
+  | Exe
+  | Test
+  | Bench
+  | Setup
+  deriving stock (Eq, Ord, Show)
+
+-- | Parse the type of a @cabal@ component, e.g library, executable, etc.
+parseComponentType :: Text -> Maybe ComponentType
+parseComponentType "lib"   = Just Lib
+parseComponentType "flib"  = Just FLib
+parseComponentType "exe"   = Just Exe
+parseComponentType "test"  = Just Test
+parseComponentType "bench" = Just Bench
+parseComponentType "setup" = Just Setup
+parseComponentType _       = Nothing
+
+-- | Print the cabal component type as expected in cabal colon syntax
+-- @pkg:ty:comp@.
+cabalComponentType :: ComponentType -> Text
+cabalComponentType Lib   = "lib"
+cabalComponentType FLib  = "flib"
+cabalComponentType Exe   = "exe"
+cabalComponentType Test  = "test"
+cabalComponentType Bench = "bench"
+cabalComponentType Setup = "setup"
+
 -- | The name of a cabal component, e.g. @lib:comp@.
 data ComponentName =
-  ComponentName { componentType :: Text
+  ComponentName { componentType :: ComponentType
                    -- ^ What's before the colon, e.g. @lib@, @exe@, @setup@...
                 , componentName :: Text
                    -- ^ The actual name of the component
                 }
     deriving stock (Eq, Ord, Show)
+
+-- | Print a cabal component using colon syntax @ty:comp@.
+cabalComponent :: ComponentName -> Text
+cabalComponent (ComponentName ty nm) = cabalComponentType ty <> ":" <> nm
 
 data PlanUnit
   = PU_Preexisting PreexistingUnit
@@ -107,10 +141,10 @@ planUnitId :: PlanUnit -> UnitId
 planUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
 planUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
 
--- | All the dependencies of a unit: @depends@ and @setup-depends@.
+-- | All the dependencies of a unit: @depends@, @exe-depends@ and @setup-depends@.
 allDepends :: ConfiguredUnit -> [UnitId]
-allDepends (ConfiguredUnit{puDepends, puSetupDepends}) =
-  puDepends ++ puSetupDepends
+allDepends (ConfiguredUnit { puDepends, puExeDepends, puSetupDepends }) =
+  puDepends ++ puExeDepends ++ puSetupDepends
 
 -- | Information about a built-in pre-existing unit (such as @base@).
 data PreexistingUnit
@@ -131,55 +165,67 @@ data ConfiguredUnit
     , puComponentName :: ComponentName
     , puFlags         :: FlagSpec
     , puDepends       :: [UnitId]
+    , puExeDepends    :: [UnitId]
     , puSetupDepends  :: [UnitId]
     }
   deriving stock Show
 
+-- | Get what kind of component this unit is: @lib@, @exe@, etc.
+cuComponentType :: ConfiguredUnit -> ComponentType
+cuComponentType = componentType . puComponentName
+
 instance FromJSON PlanUnit where
     parseJSON = withObject "plan unit" \ o -> do
-        ty <- o .: "type"
-        case ty :: Text of
-          "pre-existing" -> PU_Preexisting <$> preExisting o
-          "configured"   -> PU_Configured  <$> configured  o
-          _              -> error $ "parseJSON PlanUnit: unexpected type " ++ Text.unpack ty ++ ",\n\
-                                    \expecting 'pre-existing' or 'configured'"
+      ty <- o .: "type"
+      case ty :: Text of
+        "pre-existing" -> PU_Preexisting <$> preExisting o
+        "configured"   -> PU_Configured  <$> configured  o
+        _              -> error $
+          "parseJSON PlanUnit: unexpected type " ++ Text.unpack ty ++ ",\n\
+          \expecting 'pre-existing' or 'configured'"
       where
         preExisting o = do
-            puId      <- o .: "id"
-            puPkgName <- o .: "pkg-name"
-            puVersion <- o .: "pkg-version"
-            puDepends <- o .: "depends"
-            return $ PreexistingUnit {..}
+          puId      <- o .: "id"
+          puPkgName <- o .: "pkg-name"
+          puVersion <- o .: "pkg-version"
+          puDepends <- o .: "depends"
+          return $ PreexistingUnit {..}
 
         configured o = do
-            puId      <- o .:  "id"
-            puPkgName <- o .:  "pkg-name"
-            puVersion <- o .:  "pkg-version"
-            puFlags   <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
-            mbComps   <- o .:? "components"
-            (puComponentName, puDepends, puSetupDepends) <-
-              case mbComps of
-                Nothing -> do
-                  deps     <- o .: "depends"
-                  compName <- o .: "component-name"
-                  let comp
-                        | compName == "lib"
-                        = ComponentName "lib" (unPkgName puPkgName)
-                        | (ty,nm) <- Text.break (== ':') compName
-                        = if Text.null nm
-                          then error ( "parseJSON PlanUnit: unsupported component name" <> Text.unpack compName )
-                          else ComponentName ty (Text.drop 1 nm)
-                  return (comp, deps, [])
-                Just comps -> do
-                  lib       <- comps .:  "lib"
-                  deps      <- lib   .:  "depends"
-                  mbSetup   <- comps .:? "setup"
-                  setupDeps <-
-                    case mbSetup of
-                      Nothing    -> return []
-                      Just setup -> setup .: "depends"
-                  return (ComponentName "lib" (unPkgName puPkgName), deps, setupDeps)
-            return $ ConfiguredUnit {..}
+           puId      <- o .:  "id"
+           puPkgName <- o .:  "pkg-name"
+           puVersion <- o .:  "pkg-version"
+           puFlags   <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
+           mbComps   <- o .:? "components"
+           (puComponentName, puDepends, puExeDepends, puSetupDepends) <-
+             case mbComps of
+               Nothing -> do
+                 deps     <- o .: "depends"
+                 exeDeps  <- o .: "exe-depends"
+                 compName <- o .: "component-name"
+                 let
+                   comp
+                     | compName == "lib"
+                     = ComponentName Lib (unPkgName puPkgName)
+                     | (ty,nm) <- Text.break (== ':') compName
+                     , Just compTy <- parseComponentType ty
+                     , not $ Text.null nm
+                     = ComponentName compTy (Text.drop 1 nm)
+                     | otherwise
+                     = error $ "parseJSON PlanUnit: unsupported component name "
+                            <> Text.unpack compName
+                 return (comp, deps, exeDeps, [])
+               Just comps -> do
+                 lib       <- comps .:  "lib"
+                 deps      <- lib   .:  "depends"
+                 exeDeps   <- lib   .:  "exe-depends"
+                 mbSetup   <- comps .:? "setup"
+                 setupDeps <-
+                   case mbSetup of
+                     Nothing    -> return []
+                     Just setup -> setup .: "depends"
+                 return (ComponentName Lib (unPkgName puPkgName), deps, exeDeps, setupDeps)
+           return $ ConfiguredUnit {..}
 
 --------------------------
 

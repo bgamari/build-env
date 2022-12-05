@@ -58,12 +58,13 @@ main = do
 --  - explicit packages and allow-newer specified as command-line arguments.
 parsePlanInputs :: Verbosity -> PlanInputs -> IO CabalFilesContents
 parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
-  = do (pkgs, fileAllowNewer) <- parsePlanPackages verbosity planPkgs
+  = do (libs, exes, fileAllowNewer) <- parsePlanPackages verbosity planPkgs
        let
          allAllowNewer = fileAllowNewer <> planAllowNewer
            -- NB: allow-newer specified in the command-line overrides
            -- the allow-newer included in the seed file.
-         cabalContents = cabalFileContentsFromPackages (Map.keys pkgs)
+         pkgs = libs `Map.union` exes
+         cabalContents = cabalFileContentsFromPackages (Map.keys libs) (Map.keys exes)
        projectContents <-
          case planPins of
            Nothing -> return $ cabalProjectContentsFromPackages pkgs allAllowNewer
@@ -77,15 +78,15 @@ parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
                    -- NB: unionPkgsSpecs is left-biased: constraints from the
                    -- SEED file override constraints from the cabal.config file.
                  allAllowNewer
-           Just (Explicit pinnedPkgs) -> do
-             let allPkgs = pkgs `Map.union` pinnedPkgs
+           Just (Explicit pinnedLibs pinnedExes) -> do
+             let allPkgs = pkgs `Map.union` pinnedLibs `Map.union` pinnedExes
              return $ cabalProjectContentsFromPackages allPkgs allAllowNewer
        return $ CabalFilesContents { cabalContents, projectContents }
 
 -- | Retrieve the seed packages we want to build, either from a seed file
 -- or from explicit command line arguments.
-parsePlanPackages :: Verbosity -> PackageData -> IO (PkgSpecs, AllowNewer)
-parsePlanPackages _ (Explicit pkgs) = return (pkgs, AllowNewer [])
+parsePlanPackages :: Verbosity -> PackageData -> IO (PkgSpecs, PkgSpecs, AllowNewer)
+parsePlanPackages _ (Explicit libs exes) = return (libs, exes, AllowNewer [])
 parsePlanPackages verbosity (FromFile fp) =
   do normalMsg verbosity $
        "Reading seed packages from '" <> fp <> "'"
