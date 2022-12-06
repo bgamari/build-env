@@ -9,12 +9,14 @@
 module BuildOne ( buildPackage ) where
 
 -- base
-import Control.Monad
-  ( guard )
 import Data.Foldable
   ( for_ )
-import Data.Functor
-  ( ($>) )
+
+-- containers
+import Data.Map.Strict
+  ( Map )
+import qualified Data.Map.Strict as Map
+  ( lookup )
 
 -- directory
 import System.Directory
@@ -67,7 +69,7 @@ buildPackage :: Verbosity
                   -- ^ installation directory structure
              -> Args      -- ^ extra @Setup configure@ arguments for this unit
              -> Args      -- ^ extra @ghc-pkg register@ arguments
-             -> CabalPlan -- ^ build plan to follow (used to specify dependencies)
+             -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
              -> ConfiguredUnit -- ^ the unit to build
              -> IO ()
 buildPackage verbosity
@@ -93,47 +95,82 @@ buildPackage verbosity
                     ] ++ map unitIdArg (puSetupDepends unit)
     verboseMsg verbosity $
       "Compiling Setup.hs for " <> printableName
-    callProcessIn "." [] ghcPath setupArgs
+    callProcess $
+      CP { cwd          = "."
+         , prog         = ghcPath
+         , args         = setupArgs
+         , extraPATH    = []
+         , extraEnvVars = [] }
 
     -- Configure
-    let flagsArg = case puFlags unit of
+    let packageNameVer =
+          Text.unpack $
+          pkgNameVersion
+            (Configured.puPkgName unit)
+            (Configured.puVersion unit)
+        flagsArg = case puFlags unit of
           flags
             | flagSpecIsEmpty flags
             -> []
             | otherwise
-            -> [ "--flags=" ++ Text.unpack (showFlagSpec (puFlags unit)) ]
+            -> [ "--flags=" ++ Text.unpack (showFlagSpec flags) ]
         configureArgs = [ "--with-compiler", ghcPath
                         , "--prefix", prefix
                         , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
                         , "--package-db=" ++ tempPkgDbDir
                         , "--exact-configuration"
+                        , "--datasubdir=" ++ packageNameVer
                         , setupVerbosity verbosity
                         ] ++ flagsArg
                           ++ userConfigureArgs
                           ++ map ( dependencyArg plan unit )
                               ( Configured.puDepends unit )
                         ++ [ buildTarget unit ]
-        binDir = installDir </> "bin"
         setupExe = srcDir </> "Setup" <.> exe
     verboseMsg verbosity $
       "Configuring " <> printableName
     debugMsg verbosity $
       "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
-    callProcessIn srcDir [binDir] setupExe $ "configure" : configureArgs
-      -- Add the output binary directory to PATH, to satisfy executable
-      -- dependencies.
+    callProcess $
+      CP { cwd          = srcDir
+         , prog         = setupExe
+         , args         = "configure" : configureArgs
+
+           -- Add the output binary directory to PATH, to satisfy executable
+           -- dependencies during the build.
+         , extraPATH    = [ installDir </> "bin" ]
+
+            -- Specify the data directories for all dependencies.
+         , extraEnvVars =
+             [ ( mangledPkgName depName <> "_datadir"
+               , installDir </> Text.unpack (pkgNameVersion depName depVer) )
+             | depUnitId <- Configured.puDepends unit
+             , let dep     = lookupDependency unit depUnitId plan
+                   depName = planUnitPkgName dep
+                   depVer  = planUnitVersion dep
+            ]
+         }
 
     -- Build
     verboseMsg verbosity $
       "Building " <> printableName
-    callProcessIn srcDir [] setupExe ["build", setupVerbosity verbosity]
+    callProcess $
+      CP { cwd          = srcDir
+         , prog         = setupExe
+         , args         = ["build", setupVerbosity verbosity]
+         , extraPATH    = []
+         , extraEnvVars = [] }
 
     -- Copy
     verboseMsg verbosity $
       "Copying " <> printableName
-    callProcessIn srcDir [] setupExe
-      [ "copy", setupVerbosity verbosity
-      , "--destdir", destDir ]
+    callProcess $
+      CP { cwd          = srcDir
+         , prog         = setupExe
+         , args         = [ "copy", setupVerbosity verbosity
+                          , "--destdir", destDir ]
+         , extraPATH    = []
+         , extraEnvVars = [] }
 
     -- Register
     case cuComponentType unit of
@@ -152,10 +189,14 @@ buildPackage verbosity
                     , pkgDbDir ]
 
           -- Setup register
-          callProcessIn srcDir [] setupExe $
-            [ "register", setupVerbosity verbosity
-            , "--gen-pkg-config=" ++ pkgRegDir
-            ] ++ extraSetupArgs
+          callProcess $
+            CP { cwd          = srcDir
+               , prog         = setupExe
+               , args         = [ "register", setupVerbosity verbosity
+                                , "--gen-pkg-config=" ++ pkgRegDir
+                                ] ++ extraSetupArgs
+               , extraPATH    = []
+               , extraEnvVars = [] }
 
           -- ghc-pkg register
           is_dir <- doesDirectoryExist pkgRegDir
@@ -163,14 +204,18 @@ buildPackage verbosity
               if is_dir
               then map (pkgRegDir </>) <$> listDirectory pkgRegDir
               else return [pkgRegDir]
-          let register regFile =
-                callProcessIn "." [] ghcPkgPath $
-                  [ "register"
-                  , ghcPkgVerbosity verbosity
-                  , "--package-db", pkgDbDir
-                  , regFile ]
-                  ++ extraPkgArgs
-          mapM_ register regFiles
+          let regFileCallProcess regFile =
+                CP { cwd          = "."
+                   , prog         = ghcPkgPath
+                   , args         = [ "register"
+                                    , ghcPkgVerbosity verbosity
+                                    , "--package-db", pkgDbDir
+                                    , regFile ]
+                                    ++ extraPkgArgs
+                   , extraPATH    = []
+                   , extraEnvVars = [] }
+
+          for_ regFiles ( callProcess . regFileCallProcess )
 
       _   -> return ()
 
@@ -199,23 +244,35 @@ buildTarget ( ConfiguredUnit { puComponentName = comp } )
 -- Used to specify the 'UnitId' of a dependency to the configure script.
 -- This allows us to perform a build using the specific dependencies we have
 -- available, ignoring any bounds in the cabal file.
-dependencyArg :: CabalPlan -> ConfiguredUnit -> UnitId -> String
-dependencyArg fullPlan unit unitId = "--dependency=" ++ Text.unpack (mkDependency pu)
+dependencyArg :: Map UnitId PlanUnit -> ConfiguredUnit -> UnitId -> String
+dependencyArg fullPlan unitWeAreBuilding depUnitId
+  = "--dependency=" ++ Text.unpack (mkDependency pu)
   where
     pu :: PlanUnit
-    pu = case mapMaybePlanUnits matchingUnitId fullPlan of
-          [] -> error $ "buildPackage: can't find dependency in build plan\n\
-                        \unit:" ++ show (Configured.puPkgName unit) ++ "\n\
-                        \dependency:" ++ show unitId
-          cu:_ -> cu
-    matchingUnitId :: PlanUnit -> Maybe PlanUnit
-    matchingUnitId u = guard ( unitId == planUnitId u ) $> u
+    pu = lookupDependency unitWeAreBuilding depUnitId fullPlan
+
     mkDependency :: PlanUnit -> Text
-    mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm }))
-      = nm <> "=" <> unUnitId unitId
+    mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm } ) )
+      = nm <> "=" <> unUnitId depUnitId
     mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName pkg
                                                   , puComponentName = ComponentName _ comp } ) )
-      = pkg <> ":" <> comp <> "=" <> unUnitId unitId
+      = pkg <> ":" <> comp <> "=" <> unUnitId depUnitId
+
+-- | Look up a dependency in the full build plan.
+--
+-- Throws an error if the dependency can't be found.
+lookupDependency :: ConfiguredUnit      -- ^ the unit which has the dependency
+                                        -- (for error messages only)
+                 -> UnitId              -- ^ dependency to look up
+                 -> Map UnitId PlanUnit -- ^ build plan
+                 -> PlanUnit
+lookupDependency unitWeAreBuilding depUnitId plan
+  | Just pu <- Map.lookup depUnitId plan
+  = pu
+  | otherwise
+  = error $ "buildPackage: can't find dependency in build plan\n\
+            \unit:" ++ show (Configured.puPkgName unitWeAreBuilding) ++ "\n\
+            \dependency:" ++ show depUnitId
 
 -- | Find the @Setup.hs@/@Setup.lhs@ file to use,
 -- or create one using @main = defaultMain@ if none exist.

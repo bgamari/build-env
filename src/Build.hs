@@ -51,8 +51,10 @@ import qualified Data.ByteString.Lazy as Lazy.ByteString
 -- containers
 import qualified Data.Graph as Graph
   ( graphFromEdges', reverseTopSort )
+import Data.Map.Strict
+  ( Map )
 import qualified Data.Map.Strict as Map
-  ( (!?), assocs )
+  ( (!?), assocs, fromList )
 import qualified Data.Map.Lazy as Lazy
   ( Map )
 import qualified Data.Map.Lazy as Lazy.Map
@@ -126,7 +128,12 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
       unlines $ "cabal" : map ("  " <>) cabalBuildArgs
-    callProcessIn dir [] (cabalPath cabal) cabalBuildArgs
+    callProcess $
+      CP { cwd          = dir
+         , prog         = cabalPath cabal
+         , args         = cabalBuildArgs
+         , extraPATH    = []
+         , extraEnvVars = [] }
 
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
@@ -234,11 +241,17 @@ fetchPlan verbosity cabal fetchDir cabalPlan =
 cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
 cabalFetch verbosity cabal root pkgNmVer = do
     normalMsg verbosity $ "Fetching " <> pkgNmVer
-    callProcessIn root [] (cabalPath cabal) $
-      globalCabalArgs cabal ++
-      [ "get"
-      , pkgNmVer
-      , cabalVerbosity verbosity ]
+    let args = globalCabalArgs cabal ++
+                 [ "get"
+                 , pkgNmVer
+                 , cabalVerbosity verbosity ]
+    callProcess $
+      CP { cwd          = root
+         , prog         = cabalPath cabal
+         , args
+         , extraPATH    = []
+         , extraEnvVars = [] }
+
 
 -- | Sort the units in a 'CabalPlan' in dependency order.
 sortPlan :: CabalPlan -> [ConfiguredUnit]
@@ -292,7 +305,7 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
                 pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
             buildPackage verbosity comp srcDir buildDir dest
               pkgConfigureArgs ghcPkgArgs
-              cabalPlan pu
+              depMap pu
 
       debugMsg verbosity $
         "Units to build: " <>
@@ -328,3 +341,9 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
     unitMap = Lazy.Map.fromList
               [ (puId, pu)
               | pu@( ConfiguredUnit { puId } ) <- unitsToBuild ]
+
+    depMap :: Map UnitId PlanUnit
+    depMap = Map.fromList
+              [ (planUnitUnitId pu, pu)
+              | pu <- planUnits cabalPlan ]
+

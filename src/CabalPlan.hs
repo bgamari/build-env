@@ -137,9 +137,17 @@ configuredUnitMaybe :: PlanUnit -> Maybe ConfiguredUnit
 configuredUnitMaybe (PU_Configured pu)  = Just pu
 configuredUnitMaybe (PU_Preexisting {}) = Nothing
 
-planUnitId :: PlanUnit -> UnitId
-planUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
-planUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
+planUnitUnitId :: PlanUnit -> UnitId
+planUnitUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
+planUnitUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
+
+planUnitPkgName :: PlanUnit -> PkgName
+planUnitPkgName (PU_Preexisting (PreexistingUnit { puPkgName })) = puPkgName
+planUnitPkgName (PU_Configured  (ConfiguredUnit  { puPkgName })) = puPkgName
+
+planUnitVersion :: PlanUnit -> Version
+planUnitVersion (PU_Preexisting (PreexistingUnit { puVersion })) = puVersion
+planUnitVersion (PU_Configured  (ConfiguredUnit  { puVersion })) = puVersion
 
 -- | All the dependencies of a unit: @depends@, @exe-depends@ and @setup-depends@.
 allDepends :: ConfiguredUnit -> [UnitId]
@@ -173,6 +181,13 @@ data ConfiguredUnit
 -- | Get what kind of component this unit is: @lib@, @exe@, etc.
 cuComponentType :: ConfiguredUnit -> ComponentType
 cuComponentType = componentType . puComponentName
+
+-- | A @cabal@ mangled package name, in which @-@ has been replaced with @_@.
+mangledPkgName :: PkgName -> String
+mangledPkgName = map fixupChar . Text.unpack . unPkgName
+  where
+    fixupChar '-' = '_'
+    fixupChar c   = c
 
 instance FromJSON PlanUnit where
     parseJSON = withObject "plan unit" \ o -> do

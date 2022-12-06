@@ -4,7 +4,7 @@
 -- Module      :  Utils
 -- Description :  Utilities for @build-env@.
 module Utils
-    ( callProcessIn
+    ( CallProcess(..), callProcess
     , TempDirPermanence(..), withTempDir
     , exe
     ) where
@@ -26,10 +26,7 @@ import qualified Data.Map.Strict as Map
   ( alter, fromList, toList )
 
 -- process
-import System.Process
-    ( CreateProcess(cwd, env)
-    , proc, createProcess, waitForProcess
-    )
+import qualified System.Process as Proc
 
 -- temporary
 import System.IO.Temp
@@ -44,25 +41,42 @@ import Config
 
 --------------------------------------------------------------------------------
 
+-- | Arguments to 'callProcess'.
+data CallProcess
+  = CP
+  { cwd          :: FilePath
+     -- ^ working directory
+  , extraPATH    :: [FilePath]
+     -- ^ filepaths to add to PATH
+  , extraEnvVars :: [(String, String)]
+     -- ^ extra environment variables
+  , prog         :: FilePath
+     -- ^ executable
+  , args         :: Args
+     -- ^ arguments
+  }
+
 -- | Run a command inside the specified working directory.
 --
 -- Crashes if the spawned command returns with nonzero exit code.
-callProcessIn :: HasCallStack
-              => FilePath   -- ^ working directory
-              -> [FilePath] -- ^ filepaths to add to PATH
-              -> FilePath   -- ^ executable
-              -> Args       -- ^ arguments
-              -> IO ()
-callProcessIn cwd addToPath prog args = do
-    let processArgs0 = (proc prog args) { cwd = Just cwd }
-    processArgs <- case addToPath of
-      [] -> return processArgs0
-      _  -> do
-        env <- Map.fromList <$> getEnvironment
-        let env' = Map.toList $ augmentSearchPath "PATH" addToPath env
-        return $ processArgs0 { env = Just env' }
-    (_, _, _, ph) <- createProcess processArgs
-    res <- waitForProcess ph
+callProcess :: HasCallStack => CallProcess -> IO ()
+callProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
+    env <-
+      if null extraPATH && null extraEnvVars
+      then return Nothing
+      else do env0 <- getEnvironment
+              let env1 = Map.fromList $ env0 ++ extraEnvVars
+                  env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
+              return $ Just env2
+    let processArgs =
+          (Proc.proc prog args)
+            { Proc.cwd = Just cwd
+            , Proc.env = env }
+    case env of
+      Nothing   -> return ()
+      Just env' -> putStrLn $ "callProcess " <> prog <> " environment:\n" ++ show env'
+    (_, _, _, ph) <- Proc.createProcess processArgs
+    res <- Proc.waitForProcess ph
     case res of
       ExitSuccess -> return ()
       ExitFailure i -> do
