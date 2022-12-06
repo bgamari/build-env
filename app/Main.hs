@@ -1,7 +1,11 @@
 module Main ( main ) where
 
+-- base
+import Data.Foldable
+  ( for_ )
+
 -- bytestring
-import qualified Data.ByteString.Lazy as BSL
+import qualified Data.ByteString.Lazy as Lazy.ByteString
   ( readFile, writeFile )
 
 -- containers
@@ -34,7 +38,7 @@ main = do
         computePlanFromInputs delTemp verbosity compiler cabal planModeInputs
       normalMsg verbosity $
         "Writing build plan to '" <> planOutput <> "'"
-      BSL.writeFile planOutput planBinary
+      Lazy.ByteString.writeFile planOutput planBinary
     FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
       plan <- getPlan delTemp verbosity compiler cabal fetchInputPlan
       doFetch verbosity cabal fetchDir newOrUpd plan
@@ -111,13 +115,17 @@ getPlan :: TempDirPermanence -> Verbosity -> Compiler -> Cabal -> Plan -> IO Cab
 getPlan delTemp verbosity comp cabal planMode = do
    planBinary <-
      case planMode of
-       ComputePlan planInputs   ->
-        computePlanFromInputs delTemp verbosity comp cabal planInputs
+       ComputePlan planInputs mbPlanOutputPath -> do
+        plan@(CabalPlanBinary planData) <-
+          computePlanFromInputs delTemp verbosity comp cabal planInputs
+        for_ mbPlanOutputPath \ planOutputPath ->
+          Lazy.ByteString.writeFile planOutputPath planData
+        return plan
        UsePlan { planJSONPath } ->
          do
            normalMsg verbosity $
              "Reading build plan from '" <> planJSONPath <> "'"
-           CabalPlanBinary <$> BSL.readFile planJSONPath
+           CabalPlanBinary <$> Lazy.ByteString.readFile planJSONPath
    return $ parsePlanBinary planBinary
 
 -- | Fetch all packages in a cabal build plan.

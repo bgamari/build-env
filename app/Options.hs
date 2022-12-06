@@ -86,7 +86,12 @@ data FetchDescription
 -- or by using an existing @plan.json@ plan.
 data Plan
   -- | Compute a plan.
-  = ComputePlan PlanInputs
+  = ComputePlan
+      PlanInputs
+        -- ^ input needed to compute the plan
+      (Maybe FilePath)
+        -- ^ optional filepath at which to write out the computed plan
+
   -- | Use an existing @plan.json@ by reading the given file.
   | UsePlan
     { planJSONPath :: FilePath }

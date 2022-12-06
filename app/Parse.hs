@@ -226,7 +226,7 @@ dependencies modeDesc
 -- from a @plan.json@ on disk?
 plan :: ModeDescription -> Parser Plan
 plan modeDesc = ( UsePlan <$> optPlanPath )
-            <|> ( ComputePlan <$> planInputs modeDesc )
+            <|> ( ComputePlan <$> planInputs modeDesc <*> optPlanOutput )
 
   where
     optPlanPath :: Parser FilePath
@@ -236,6 +236,14 @@ plan modeDesc = ( UsePlan <$> optPlanPath )
         <> long "plan"
         <> help "Input 'plan.json' file"
         <> metavar "INFILE" )
+
+    optPlanOutput :: Parser (Maybe FilePath)
+    optPlanOutput =
+      option (fmap Just str)
+        (  long "output-plan"
+        <> value Nothing
+        <> help "Output 'plan.json' file"
+        <> metavar "OUTFILE" )
 
 -- | Parse information about fetched sources: in which directory they belong,
 -- and what build plan they correspond to.
