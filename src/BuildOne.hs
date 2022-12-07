@@ -168,7 +168,7 @@ configureStep :: Verbosity
   -> FilePath
   -> FilePath
   -> FilePath
-  -> [FilePath]
+  -> [String]
   -> ConfiguredUnit
   -> [PlanUnit]
   -> IO ()

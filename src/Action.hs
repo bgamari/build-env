@@ -61,7 +61,7 @@ data Interp = Run | Script
 
 data Code (i :: Interp) ( a :: Type ) where
   Str    :: Text -> Code i Text
-  Arr    :: [Text] -> Code i [Text]
+  Arr    :: [Code i Text] -> Code i [Text]
   (:<>:) :: Code i Text -> Code i Text -> Code i Text
   Var    :: Var i a -> Code i a
 
@@ -83,7 +83,7 @@ data Action (i :: Interp) (r :: Type) where
         -- ^ use this working directory
     -> Code i Text
         -- ^ process
-    -> [Code i Text]
+    -> Code i [Text]
         -- ^ arguments
     -> Action i ()
 
@@ -183,8 +183,8 @@ runProgram = interpretWithMonad runAction
 
 eval :: Code Run a -> a
 eval (Str a) = a
-eval (Arr a) = a
-eval (a :<>: b) = eval  a <> eval  b
+eval (Arr a) = map eval a
+eval (a :<>: b) = eval a <> eval b
 eval (Var (VarValue v)) = v
 
 runAction :: HasCallStack => Action Run a -> IO a
@@ -195,7 +195,7 @@ runAction = \case
                 , extraPATH    = map str addToPATH
                 , extraEnvVars = map (str *** str) envVars
                 , prog         = str p
-                , args         = map str args }
+                , args         = map Text.unpack $ eval args }
     in CP.callProcess cp
 
   DoesItExist fileOrDir f ->
@@ -216,6 +216,8 @@ runAction = \case
   CallFun (FunValue f) strArgs arrArgs -> do
     RunResVar a <- runProgram $ f strArgs arrArgs InitResVar
     return $ a
+      -- TODO: if we never write to the ResVar
+      -- then we will get a crash here.
 
   Fold _ (VarValue arr) f -> case f of
     BuildArgs s0 sep ->
@@ -279,7 +281,7 @@ noIndent = modifyIndent (const 0)
 
 splice :: Code Script a -> Text
 splice (Str a) = around a
-splice (Arr a) = Text.unwords (map around a)
+splice (Arr a) = Text.unwords (map splice a)
 splice (a :<>: b) = splice a <> splice b
 splice (Var (VarName (BashName v))) = "\"${" <> v <> "}\""
 
@@ -308,13 +310,13 @@ shellAction = \ case
         ++ mbUpdatePath
         ++ map mkEnvVar envVars
         ++
-        [ "  " <> splice p <> " " <> Text.unwords (map splice args) <> " )"
+        [ "  " <> splice p <> " " <> splice args <> " )"
         , var <> "=$?"
         , "if [ \"${" <> var <> "}\" -eq 0 ]"
         , "then true"
         , "else"
         , "  echo \"callProcess failed with non-zero exit code. Command:\""
-        , "  echo \"> " <> ppr p <> " " <> Text.unwords (map ppr args) <> "\""
+        , "  echo \"> " <> ppr p <> " " <> ppr args <> "\""
         , "  exit \"${" <> var <> "}\""
         , "fi" ]
     writeLines code
@@ -322,7 +324,7 @@ shellAction = \ case
 
       ppr :: Code Script a -> Text
       ppr (Str a) = a
-      ppr (Arr a) = Text.unwords a
+      ppr (Arr a) = Text.unwords (map ppr a)
       ppr (a :<>: b) = ppr a <> ppr b
       ppr (Var (VarName (BashName v))) = "${" <> v <> "}"
 
@@ -358,7 +360,7 @@ shellAction = \ case
           Dir  -> "-d"
 
   CreateFile fp contents -> do
-    writeLines ["cat > " <> splice fp <> " << EOF"]
+    writeLines [ "cat > " <> splice fp <> " << EOF" ]
     noIndent $
       writeLines ( Text.lines contents ++ [ "EOF" ] )
 
@@ -368,7 +370,7 @@ shellAction = \ case
     where
       varRHS :: Code Script a -> Text
       varRHS (Str a) = "\"" <> a <> "\""
-      varRHS (Arr a) = "( " <> Text.unwords (map around a) <> " )"
+      varRHS (Arr a) = "( " <> Text.unwords (map varRHS a) <> " )"
       varRHS (a :<>: b) = varRHS a <> varRHS b
       varRHS (Var (VarName (BashName v))) = "\"${" <> v <> "}\""
 
@@ -484,7 +486,7 @@ callProcess :: [Code i Text]
             -> [(Code i Text, Code i Text)]
             -> Code i Text
             -> Code i Text
-            -> [Code i Text]
+            -> Code i [Text]
             -> Program (Action i) ()
 callProcess pATH envVars cwd prog args =
   act (CallProcess pATH envVars cwd prog args)
@@ -506,15 +508,15 @@ example = do
     ifThenElse resVar testExists
         ( \ rv -> do
           callProcess [] [( Var prog :<>: Str "_datadir", Str "myDataDir" )] (Str ".")
-               (Var prog) [ Str "ghc", Str "Setup.hs", Var res ]
+               (Var prog) ( Arr [ Str "ghc", Str "Setup.hs", Var res ] )
           writeResVar (Str "branch1") rv
         )
         ( \ rv -> do
-            callProcess [] [] (Str ".") (Str "echo") [ Str "dir didn't exist" ]
+            callProcess [] [] (Str ".") (Str "echo") ( Arr [ Str "dir didn't exist" ] )
             writeResVar (Str "branch2") rv
         )
   progVar <- let' "myProg" (Str "echo")
-  arrVar  <- let' "myArr" (Arr ["pkg1-123","pkg2-234","pkg3-456"])
+  arrVar  <- let' "myArr" (Arr [ Str "pkg1-123", Str "pkg2-234",Str "pkg3-456"])
   testVar <- let' "testVar" (Str "install2")
   funRes <- callFun myFun (testVar :. progVar :. Nil) (arrVar :. Nil)
   return (Var funRes)
@@ -540,3 +542,45 @@ findSetupHs = fun @Text "findSetupHs" ("root" :. Nil) Nil \ ( root :. _ ) _ rv0 
           , "main = defaultMain"
           ]
       writeResVar setupHs rv2
+
+configurePackage :: Var i Text ->
+                    Var i Text ->
+                    Var i Text ->
+                    Var i Text ->
+                    Program (Action i) (Fun i 5 3 Text)
+configurePackage ghc prefix installDir tempPkgDbDir =
+  fun @Text "configurePackage"
+    ( "srcDir" :. "setupExe" :. "pkgNameVer" :. "unitId" :. "compId" :. Nil )
+    ( "flags" :. "deps" :. "userArgs" :. Nil )
+    \ ( srcDir :. setupExe :. pkgNameVer :. unitId :. compId :. _ )
+      ( flagsArr :. depsArr :. userArgsArr :. _ )
+      rv -> do
+      basicArgsArr <- let' "basicArgsArr" $
+        Arr [ Str " --with-compiler ", Var ghc
+            , Str " --prefix "       , Var prefix
+            , Str " --cid "          , Var unitId
+            , Str " --package-db "   , Var tempPkgDbDir
+            , Str " --exact-configuration "
+            , Str " --datasubdir="   , Var pkgNameVer ]
+      basicArgs <- fold "basicArgs" basicArgsArr (BuildArgs "" "")
+      flagArgs  <- fold "flagArgs"  flagsArr     (BuildArgs " --flags=" "")
+      depArgs   <- fold "depArgs"   depsArr      (BuildArgs "" " --dependency=")
+      userArgs  <- fold "userArgs"  userArgsArr  (BuildArgs "" " ")
+      let configureArgs =
+            Arr [ Str "configure"
+                , Var basicArgs
+                , Var flagArgs
+                , Var depArgs
+                , Var userArgs
+                , Var compId ]
+      callProcess [ Var installDir :<>: Str "/bin" ] [ {- env vars -} ] (Var srcDir)
+        (Var setupExe) configureArgs
+      writeResVar (Str "done") rv
+
+testConfigure :: Program (Action i) (Fun i 5 3 Text)
+testConfigure = do
+  ghc          <- let' "ghc"          (Str "false")
+  prefix       <- let' "prefix"       (Str "C:/Docs/Code/Haskell/mk-pkg-env")
+  installDir   <- let' "installDir"   (Str "C:/Docs/Code/Haskell/mk-pkg-env/install2")
+  tempPkgDbDir <- let' "tempPkgDbDir" (Str "C:/Docs/Code/Haskell/mk-pkg-env/sources2/package.conf")
+  configurePackage ghc prefix installDir tempPkgDbDir
