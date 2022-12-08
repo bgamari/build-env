@@ -4,7 +4,7 @@
 -- Module      :  Utils
 -- Description :  Utilities for @build-env@.
 module Utils
-    ( CallProcess(..), callProcess
+    ( CallProcess(..), callProcessInIO
     , TempDirPermanence(..), withTempDir
     , exe
     ) where
@@ -59,8 +59,8 @@ data CallProcess
 -- | Run a command inside the specified working directory.
 --
 -- Crashes if the spawned command returns with nonzero exit code.
-callProcess :: HasCallStack => CallProcess -> IO ()
-callProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
+callProcessInIO :: HasCallStack => CallProcess -> IO ()
+callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
     env <-
       if null extraPATH && null extraEnvVars
       then return Nothing
@@ -69,12 +69,9 @@ callProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
                   env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
               return $ Just env2
     let processArgs =
-          (Proc.proc prog args)
+          ( Proc.proc prog args )
             { Proc.cwd = Just cwd
             , Proc.env = env }
-    case env of
-      Nothing   -> return ()
-      Just env' -> putStrLn $ "callProcess " <> prog <> " environment:\n" ++ show env'
     (_, _, _, ph) <- Proc.createProcess processArgs
     res <- Proc.waitForProcess ph
     case res of

@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -49,10 +50,15 @@ newtype Verbosity = Verbosity Int
   deriving newtype (Eq, Ord)
   deriving stock   Show
 
+pattern Normal, Verbose, Debug :: Verbosity
+pattern Normal  = Verbosity 1
+pattern Verbose = Verbosity 2
+pattern Debug   = Verbosity 3
+
 normalMsg, verboseMsg, debugMsg :: Verbosity -> String -> IO ()
-normalMsg  v msg = when (v >= Verbosity 1) $ putStrLn msg
-verboseMsg v msg = when (v >= Verbosity 2) $ putStrLn msg
-debugMsg   v msg = when (v >= Verbosity 3) $ putStrLn msg
+normalMsg  v msg = when (v >= Normal ) $ putStrLn msg
+verboseMsg v msg = when (v >= Verbose) $ putStrLn msg
+debugMsg   v msg = when (v >= Debug  ) $ putStrLn msg
 
 cabalVerbosity :: Verbosity -> String
 cabalVerbosity (Verbosity i)
@@ -70,19 +76,10 @@ data BuildStrategy
   -- | Asynchronously build all the packages, which each package
   -- waiting on its dependencies.
   | Async
-  -- | Combination of 'TopoSort' and 'Async'.
-  | TopoSortAsync
+  -- | Output a build script that can be run later.
+  | Script FilePath
   deriving stock Show
 
-doTopoSort :: BuildStrategy -> Bool
-doTopoSort TopoSort      = True
-doTopoSort Async         = False
-doTopoSort TopoSortAsync = True
-
-doAsync :: BuildStrategy -> Bool
-doAsync TopoSort      = False
-doAsync Async         = True
-doAsync TopoSortAsync = True
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence

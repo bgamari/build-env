@@ -11,9 +11,11 @@
 --
 -- 'fetchPlan' calls @cabal unpack@ to fetch all packages in the given plan.
 --
--- 'buildPlan' builds each package in the build plan from source,
--- using 'buildPackage'. This can be done either asynchronously or sequentially
+-- 'buildPlan' builds each unit in the build plan from source,
+-- using 'buildUnit'. This can be done either asynchronously or sequentially
 -- in dependency order, depending on the 'BuildStrategy'.
+-- 'buildPlan' can instead output a shell script containing build instructions,
+-- if using the 'Script' 'BuildStrategy'.
 module Build
   ( -- * Computing, fetching and building plans
     computePlan
@@ -37,6 +39,8 @@ import Data.Maybe
   ( mapMaybe, maybeToList )
 import Data.String
   ( IsString )
+import Data.Traversable
+  ( for )
 import Data.Version
   ( Version )
 
@@ -85,6 +89,8 @@ import qualified Data.Text.IO as Text
 import BuildOne
 import CabalPlan
 import Config
+import Script
+  ( BuildScript, runBuildScript, script )
 import Target
 import Utils
 
@@ -128,7 +134,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
       unlines $ "cabal" : map ("  " <>) cabalBuildArgs
-    callProcess $
+    callProcessInIO $
       CP { cwd          = dir
          , prog         = cabalPath cabal
          , args         = cabalBuildArgs
@@ -245,7 +251,7 @@ cabalFetch verbosity cabal root pkgNmVer = do
                  [ "get"
                  , pkgNmVer
                  , cabalVerbosity verbosity ]
-    callProcess $
+    callProcessInIO $
       CP { cwd          = root
          , prog         = cabalPath cabal
          , args
@@ -271,8 +277,7 @@ sortPlan plan =
 --
 -- Note: this function will fail if one of the packages has already been
 -- registed in the package database.
-buildPlan :: TempDirPermanence
-          -> Verbosity
+buildPlan :: Verbosity
           -> Compiler
           -> FilePath    -- ^ fetched sources directory (input)
           -> DestDir Raw -- ^ installation directory structure (output)
@@ -282,7 +287,7 @@ buildPlan :: TempDirPermanence
           -> Args        -- ^ extra @ghc-pkg@ arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
-buildPlan delTemp verbosity comp fetchDir0 destDir0
+buildPlan verbosity comp fetchDir0 destDir0
           buildStrat
           configureArgs ghcPkgArgs
           cabalPlan
@@ -291,51 +296,61 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
     dest@( DestDir { installDir, prefix, destDir } )
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
-    withTempDir delTemp "build" \ buildDir -> do
 
-      verboseMsg verbosity $
-        unlines [ "       prefix: " <> prefix
-                , "      destDir: " <> destDir
-                , "   installDir: " <> installDir
-                , "  tmpBuildDir: " <> buildDir ]
+    verboseMsg verbosity $
+      unlines [ "       prefix: " <> prefix
+              , "      destDir: " <> destDir
+              , "   installDir: " <> installDir ]
 
-      let buildPkg :: ConfiguredUnit -> IO ()
-          buildPkg pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) = do
-            let srcDir = fetchDir </> Text.unpack (pkgNameVersion puPkgName puVersion)
-                pkgConfigureArgs = lookupTargetArgs configureArgs puPkgName puComponentName
-            buildPackage verbosity comp srcDir buildDir dest
-              pkgConfigureArgs ghcPkgArgs
-              depMap pu
+    let prepareUnit :: ConfiguredUnit -> IO BuildScript
+        prepareUnit pu@(ConfiguredUnit { puPkgName, puComponentName }) = do
+          let srcDir = fetchDir
+              pkgConfigureArgs =
+                lookupTargetArgs configureArgs puPkgName puComponentName
+          buildUnit verbosity comp srcDir dest
+            pkgConfigureArgs ghcPkgArgs
+            depMap pu
 
-      debugMsg verbosity $
-        "Units to build: " <>
-          unlines
-            ( map
-              ( Text.unpack . cabalComponent . puComponentName )
-              unitsToBuild
-            )
+    debugMsg verbosity $
+      "Units to build: " <>
+        unlines
+          ( map
+            ( Text.unpack . cabalComponent . puComponentName )
+            unitsToBuild
+          )
 
-      if doAsync buildStrat
-      then do unitAsyncs <- mfix \ unitAsyncs ->
-                let doPkgAsync :: ConfiguredUnit -> IO ()
-                    doPkgAsync pu = do
-                        for_ (allDepends pu) \ depUnitId ->
-                          for_ (unitAsyncs Map.!? depUnitId) \ cu ->
-                            -- (Nothing for Preexisting packages)
-                            wait cu
-                        buildPkg pu
-                 in traverse (async . doPkgAsync) unitMap
-              mapM_ wait unitAsyncs
-      else for_ unitsToBuild buildPkg
+    case buildStrat of
+      Async -> do
+        -- First prepare all the units.
+        let prepUnit cu = do { steps <- prepareUnit cu; return (cu, steps) }
+        buildScripts <- for unitMap prepUnit
+
+        -- Then compile them asynchonously.
+        unitAsyncs <- mfix \ unitAsyncs ->
+          let doPkgAsync :: (ConfiguredUnit, BuildScript) -> IO ()
+              doPkgAsync (pu, steps) = do
+                  for_ (allDepends pu) \ depUnitId ->
+                    for_ (unitAsyncs Map.!? depUnitId) \ cu ->
+                      -- (Nothing for Preexisting packages)
+                      wait cu
+                  runBuildScript steps
+           in traverse (async . doPkgAsync) buildScripts
+        mapM_ wait unitAsyncs
+
+      _ -> do
+        buildScripts <- for unitsToBuild prepareUnit
+        case buildStrat of
+          TopoSort ->
+            for_ buildScripts runBuildScript
+          Script fp ->
+            Text.writeFile fp (script $ concat buildScripts)
 
   where
 
     unitsToBuild :: [ConfiguredUnit]
     unitsToBuild
-      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyUnitId)
-      $ if   doTopoSort buildStrat
-        then sortPlan cabalPlan
-        else mapMaybe configuredUnitMaybe $ planUnits cabalPlan
+      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyUnitId )
+      $ sortPlan cabalPlan
 
     unitMap :: Lazy.Map UnitId ConfiguredUnit
     unitMap = Lazy.Map.fromList
@@ -346,4 +361,3 @@ buildPlan delTemp verbosity comp fetchDir0 destDir0
     depMap = Map.fromList
               [ (planUnitUnitId pu, pu)
               | pu <- planUnits cabalPlan ]
-

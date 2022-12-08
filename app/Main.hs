@@ -41,16 +41,18 @@ main = do
       Lazy.ByteString.writeFile planOutput planBinary
     FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
       plan <- getPlan delTemp verbosity compiler cabal fetchInputPlan
-      doFetch verbosity cabal fetchDir newOrUpd plan
+      doFetch verbosity cabal fetchDir True newOrUpd plan
     BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                       , buildFetch, buildStrategy, buildDestDir
                       , configureArgs, ghcPkgArgs } ) -> do
       plan <- getPlan delTemp verbosity compiler cabal fetchInputPlan
       case buildFetch of
         Prefetched     -> return ()
-        Fetch newOrUpd -> doFetch verbosity cabal fetchDir newOrUpd plan
-      normalMsg verbosity "Building and registering packages"
-      buildPlan delTemp verbosity compiler fetchDir buildDestDir buildStrategy
+        Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
+      case buildStrategy of
+        Script fp -> normalMsg verbosity $ "Writing build script to " <> fp
+        _         -> normalMsg verbosity "Building and registering packages"
+      buildPlan verbosity compiler fetchDir buildDestDir buildStrategy
         configureArgs ghcPkgArgs
         plan
 
@@ -129,16 +131,22 @@ getPlan delTemp verbosity comp cabal planMode = do
    return $ parsePlanBinary planBinary
 
 -- | Fetch all packages in a cabal build plan.
-doFetch :: Verbosity -> Cabal -> FilePath -> NewOrExisting -> CabalPlan -> IO ()
-doFetch verbosity cabal fetchDir0 newOrUpd plan = do
+doFetch :: Verbosity
+        -> Cabal
+        -> FilePath
+        -> Bool -- ^ True <=> we are fetching (not building)
+                -- (only relevant for error messages)
+        -> NewOrExisting
+        -> CabalPlan
+        -> IO ()
+doFetch verbosity cabal fetchDir0 weAreFetching newOrUpd plan = do
   fetchDir       <- canonicalizePath fetchDir0
   fetchDirExists <- doesDirectoryExist fetchDir
   case newOrUpd of
     New | fetchDirExists ->
-      error $ unlines
-        [ "Fetch directory already exists."
-        , "Use --update to update an existing directory."
-        , "Fetch directory: " <> fetchDir ]
+      error $ unlines $
+       "Fetch directory already exists." : existsMsg
+          ++ [ "Fetch directory: " <> fetchDir  ]
     Existing | not fetchDirExists ->
       error $ unlines
         [ "Fetch directory must already exist when using --update."
@@ -148,3 +156,11 @@ doFetch verbosity cabal fetchDir0 newOrUpd plan = do
   normalMsg verbosity $
     "Fetching sources from build plan into directory '" <> fetchDir <> "'"
   fetchPlan verbosity cabal fetchDir plan
+
+  where
+    existsMsg
+      | weAreFetching
+      = [ "Use --update to update an existing directory." ]
+      | otherwise
+      = [ "Use --prefetched to build using a prefetched source directory,"
+        , "or --update to continue fetching before building." ]

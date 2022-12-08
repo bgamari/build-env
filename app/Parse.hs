@@ -292,10 +292,18 @@ build = do
   where
 
     optStrategy :: Parser BuildStrategy
-    optStrategy =
-      bool Async TopoSort <$>
-        switch (  long "no-async"
-               <> help "Disable asynchronous package building (useful for debugging)" )
+    optStrategy = async <|> script <|> pure TopoSort
+
+    async :: Parser BuildStrategy
+    async = flag' Async
+        (  long "async"
+        <> help "Use asynchronous package building" )
+
+    script :: Parser BuildStrategy
+    script = option (Script <$> str)
+        (  long "script"
+        <> help "Output a shell script containing build steps"
+        <> metavar "OUTFILE" )
 
     optFetch :: Parser Fetch
     optFetch =

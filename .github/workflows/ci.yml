@@ -36,16 +36,25 @@ jobs:
       run: |
         cabal run exe:build-env -- plan lens -p plan.json -v2
         cabal run exe:build-env -- fetch -p plan.json -f sources -v2
-        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" --no-async -v2
+        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -v2
         ghc-pkg --package-db=install/package.conf field lens id
 
     - name: "Test 2: build aeson (seed file & cabal.config)"
       working-directory: ./tests/test2
       run: |
-        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --no-async -v2
+        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install -v2
         ghc-pkg --package-db=install/package.conf field aeson id
 
     - name: "Test 3: build c2hs executable (command line)"
       working-directory: ./tests/test3
       run: |
-        cabal run exe:build-env -- build exe:c2hs -f sources -o install --no-async -v2
+        cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2
+
+    - name: "Test 4: generate a build script for attoparsec and run it"
+      working-directory: ./tests/test4
+      if: runner.os != 'Windows'
+      run: |
+        cabal run exe:build-env -- build attoparsec -f sources -o install --script build_atto.sh -v2
+        chmod +x build_atto.sh
+        ./build_atto.sh
+        ghc-pkg --package-db=install/package.conf field attoparsec id
