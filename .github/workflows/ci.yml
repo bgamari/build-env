@@ -58,3 +58,8 @@ jobs:
         chmod +x build_atto.sh
         ./build_atto.sh
         ghc-pkg --package-db=install/package.conf field attoparsec id
+
+    - name: "Test 5: bootstrap build-env"
+      working-directory: ./tests/test5
+      run: |
+        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local "build-env ../.."
