@@ -40,12 +40,10 @@ data Mode
   | BuildMode Build
   deriving stock Show
 
--- | How to specify which packages to build/constrain.
-data PackageData
-  -- | Explicit description of packages.
-  = Explicit
-      PkgSpecs -- ^ libraries
-      PkgSpecs -- ^ executables
+-- | How to specify which packages/units to build/constrain.
+data PackageData pkgs
+  -- | Explicit description of packages/units.
+  = Explicit pkgs
   -- | Parse package information from the given file.
   --
   -- The file contents will be interpreted as follows:
@@ -53,7 +51,7 @@ data PackageData
   --   - pinned packages: this is a @cabal.config@ freeze file,
   --     which uses @cabal.project@ syntax. See 'readCabalDotConfig'.
   --
-  --   - seed packages: this is a list of seed packages to build,
+  --   - seed units: this is a list of seed units to build,
   --     with inline flags and constraints, and allow-newer stanzas.
   --     See 'parseSeedFile'.
   | FromFile FilePath
@@ -62,9 +60,9 @@ data PackageData
 -- | Inputs for the computation of a cabal plan.
 data PlanInputs
   = PlanInputs
-    { planPkgs       :: PackageData
+    { planPkgs       :: PackageData UnitSpecs
       -- ^ Seed dependencies for the build plan.
-    , planPins       :: Maybe PackageData
+    , planPins       :: Maybe (PackageData PkgSpecs)
       -- ^ Additional package constraints.
     , planAllowNewer :: AllowNewer
       -- ^ Allow-newer specification.

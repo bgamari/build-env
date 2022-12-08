@@ -66,7 +66,7 @@ import qualified Data.Map.Lazy as Lazy.Map
 import Data.Set
   ( Set )
 import qualified Data.Set as Set
-  ( fromList )
+  ( elems, fromList, toList )
 
 -- directory
 import System.Directory
@@ -87,12 +87,15 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildOne
+  ( buildUnit )
 import CabalPlan
 import Config
 import Script
   ( BuildScript, runBuildScript, script )
 import Target
+  ( TargetArgs, lookupTargetArgs )
 import Utils
+  ( CallProcess(..), callProcessInIO, withTempDir )
 
 --------------------------------------------------------------------------------
 
@@ -146,13 +149,18 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
 
 -- | The contents of a dummy @cabal.project@ file, specifying
 -- package constraints, flags and allow-newer.
-cabalProjectContentsFromPackages :: PkgSpecs -> AllowNewer -> Text
-cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
+cabalProjectContentsFromPackages :: UnitSpecs -> PkgSpecs -> AllowNewer -> Text
+cabalProjectContentsFromPackages units pins (AllowNewer allowNewer) =
      "packages: .\n\n"
    <> allowNewers
    <> flagSpecs
    <> constraints
   where
+
+    allPkgs = fmap fst units `unionPkgSpecsOverriding` pins
+      -- Constraints from the SEED file (units) should override
+      -- constraints from the cabal.config file (pins).
+
     constraints = Text.unlines
         [ Text.unwords ["constraints:", unPkgName nm, cts]
         | (nm, ps) <- Map.assocs allPkgs
@@ -167,7 +175,7 @@ cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
       = Text.unlines $
           "allow-newer:" :
             [ "    " <> p <> ":" <> q <> ","
-            | (p,q) <- allowNewer ]
+            | (p,q) <- Set.elems allowNewer ]
 
     flagSpecs = Text.unlines
         [ Text.unlines
@@ -180,28 +188,54 @@ cabalProjectContentsFromPackages allPkgs (AllowNewer allowNewer) =
         ]
 
 -- | The contents of a dummy @cabal@ file with dependencies on
--- the specified packages (without any constraints).
+-- the specified units (without any constraints).
 --
 -- The corresponding package Id is 'dummyPackageId'.
-cabalFileContentsFromPackages :: [PkgName] -- ^ libraries
-                              -> [PkgName] -- ^ executables
-                              -> Text
-cabalFileContentsFromPackages libs exes =
+cabalFileContentsFromPackages :: UnitSpecs -> Text
+cabalFileContentsFromPackages units =
   Text.unlines
-    [ "cabal-version: 2.4"
+    [ "cabal-version: 3.0"
     , "name: " <> dummyPackageName
     , "version: 0"
-    , "library"
-    , "  build-depends:"
-    ] <> Text.intercalate ",\n"
-         [ "    " <> nm
-         | PkgName nm <- libs ]
-     <> if null exes
-        then ""
-        else "\n  build-tool-depends:\n"
+    , "library" ]
+  <> libDepends
+  <> exeDepends
+  where
+    isLib (ComponentName ty lib) = case ty of { Lib -> Just lib; _ -> Nothing }
+    isExe (ComponentName ty exe) = case ty of { Exe -> Just exe; _ -> Nothing }
+    allLibs = [ (pkg, libsInPkg)
+              | (pkg, (_, comps)) <- Map.assocs units
+              , let libsInPkg = mapMaybe isLib $ Set.toList comps
+              , not (null libsInPkg) ]
+    allExes = [ (pkg, exesInPkg)
+            | (pkg, (_, comps)) <- Map.assocs units
+            , let exesInPkg = mapMaybe isExe $ Set.toList comps
+            , not (null exesInPkg) ]
+
+    dep (PkgName pkg) [comp]
+      | pkg == comp
+      = pkg
+      | otherwise
+      = pkg <> ":" <> comp
+    dep (PkgName pkg) comps
+      = pkg <> ":{" <> Text.intercalate "," comps <> "}"
+
+    libDepends
+      | null allLibs
+      = ""
+      | otherwise
+      = "\n  build-depends:\n"
           <> Text.intercalate ",\n"
-              [ "    " <> nm <> ":" <> nm
-              | PkgName nm <- exes ]
+               [ "    " <> dep pkg libs
+               | (pkg, libs) <- allLibs ]
+    exeDepends
+      | null allExes
+      = ""
+      | otherwise
+      = "\n  build-tool-depends:\n"
+          <> Text.intercalate ",\n"
+               [ "    " <> dep pkg exes
+               | (pkg, exes) <- allExes ]
 
 -- | The file contents of the cabal files of a cabal project;
 -- @pkg.cabal@ and @cabal.project@.

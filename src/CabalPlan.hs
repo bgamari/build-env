@@ -25,6 +25,8 @@ import qualified Data.ByteString.Lazy as Lazy
 import qualified Data.Map.Strict as Strict
   ( Map )
 import qualified Data.Map.Strict as Map
+import Data.Set
+  ( Set )
 
 -- text
 import Data.Text
@@ -127,6 +129,32 @@ data ComponentName =
 -- | Print a cabal component using colon syntax @ty:comp@.
 cabalComponent :: ComponentName -> Text
 cabalComponent (ComponentName ty nm) = cabalComponentType ty <> ":" <> nm
+
+-- | Parse a cabal package component, using the syntax @pkg:ty:comp@,
+-- e.g. @attoparsec:lib:attoparsec-internal@.
+parsePkgComponent :: Text -> Maybe ( PkgName, ComponentName )
+parsePkgComponent txt = case Text.splitOn ":" txt of
+  ty:pkg:[]
+    | Just t <- parseComponentType ty
+    , validPackageName pkg
+    -> Just ( PkgName pkg, ComponentName t pkg )
+  pkg:ty:comp:[]
+    | Nothing <- parseComponentType pkg
+    , validPackageName pkg
+    , Just t <- parseComponentType ty
+    , validPackageName comp
+    -> Just ( PkgName pkg, ComponentName t comp )
+  pkg:comp:[]
+    | Nothing <- parseComponentType pkg
+    , validPackageName pkg
+    , validPackageName comp
+    -> Just ( PkgName comp, ComponentName Lib comp )
+  pkg:[]
+    | Nothing <- parseComponentType pkg
+    , validPackageName pkg
+    -> Just ( PkgName pkg, ComponentName Lib pkg )
+  _ -> Nothing
+
 
 data PlanUnit
   = PU_Preexisting PreexistingUnit
@@ -248,11 +276,19 @@ instance FromJSON PlanUnit where
 newtype Constraints = Constraints Text
   deriving stock Show
 
+instance Semigroup Constraints where
+  Constraints c1 <> Constraints c2 =
+    Constraints ( " ( " <> c1 <> " ) && ( " <> c2 <> " )" )
+
 -- | A mapping from a package name to its flags and constraints.
 type PkgSpecs = Strict.Map PkgName PkgSpec
 
--- | A list of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
-newtype AllowNewer = AllowNewer [(Text, Text)]
+-- | A mapping from a package name to its flags, constraints,
+-- and components we want to build from it.
+type UnitSpecs = Strict.Map PkgName (PkgSpec, Set ComponentName)
+
+-- | A collection of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
+newtype AllowNewer = AllowNewer ( Set (Text, Text) )
   deriving stock Show
   deriving newtype ( Semigroup, Monoid )
 
@@ -262,11 +298,35 @@ data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
                        }
   deriving stock Show
 
+parsePkgSpec :: Text -> PkgSpec
+parsePkgSpec l = parseSpec Map.empty ( Text.words l )
+  where
+    parseSpec :: Strict.Map Text Bool -> [Text] -> PkgSpec
+    parseSpec flags []
+      = PkgSpec { psConstraints = Nothing
+                , psFlags       = FlagSpec flags }
+    parseSpec flags (w:ws)
+      | Just (s,f) <- Text.uncons w
+      , s == '+' || s == '-'
+      = parseSpec (Map.insert f (s == '+') flags) ws
+      | otherwise
+      = PkgSpec { psConstraints = Just $ Constraints (Text.unwords (w:ws))
+                , psFlags       = FlagSpec flags }
+
+instance Semigroup PkgSpec where
+  ( PkgSpec c1 f1 ) <> ( PkgSpec c2 f2 ) =
+    PkgSpec ( c1 <> c2 )
+            ( f1 <> f2 )
+
 -- | Left-biased union of two sets of packages,
 -- overriding flags and constraints of the second argument
 -- with those provided in the first argument.
-unionPkgSpecs :: PkgSpecs -> PkgSpecs -> PkgSpecs
-unionPkgSpecs = Map.unionWith unionPkgSpec
+unionPkgSpecsOverriding :: PkgSpecs -> PkgSpecs -> PkgSpecs
+unionPkgSpecsOverriding = Map.unionWith unionPkgSpec
+
+-- | Combine two 'UnitSpecs'. Combines constraints and flags.
+unionUnitSpecsCombining :: UnitSpecs -> UnitSpecs -> UnitSpecs
+unionUnitSpecsCombining = Map.unionWith (<>)
 
 -- | Left-biased union of package flags and constraints.
 unionPkgSpec :: PkgSpec -> PkgSpec -> PkgSpec

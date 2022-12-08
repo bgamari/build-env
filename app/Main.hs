@@ -10,7 +10,9 @@ import qualified Data.ByteString.Lazy as Lazy.ByteString
 
 -- containers
 import qualified Data.Map as Map
-  ( keys, union )
+  ( empty )
+import qualified Data.Set as Set
+  ( empty )
 
 -- directory
 import System.Directory
@@ -64,35 +66,28 @@ main = do
 --  - explicit packages and allow-newer specified as command-line arguments.
 parsePlanInputs :: Verbosity -> PlanInputs -> IO CabalFilesContents
 parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
-  = do (libs, exes, fileAllowNewer) <- parsePlanPackages verbosity planPkgs
+  = do (pkgs, fileAllowNewer) <- parsePlanPackages verbosity planPkgs
        let
          allAllowNewer = fileAllowNewer <> planAllowNewer
            -- NB: allow-newer specified in the command-line overrides
            -- the allow-newer included in the seed file.
-         pkgs = libs `Map.union` exes
-         cabalContents = cabalFileContentsFromPackages (Map.keys libs) (Map.keys exes)
+         cabalContents = cabalFileContentsFromPackages pkgs
        projectContents <-
          case planPins of
-           Nothing -> return $ cabalProjectContentsFromPackages pkgs allAllowNewer
+           Nothing -> return $ cabalProjectContentsFromPackages pkgs Map.empty allAllowNewer
            Just (FromFile pinCabalConfig) -> do
              normalMsg verbosity $
                "Reading 'cabal.config' file at '" <> pinCabalConfig <> "'"
              pins <- parseCabalDotConfigPkgs pinCabalConfig
-             return $
-               cabalProjectContentsFromPackages
-                 (pkgs `unionPkgSpecs` pins)
-                   -- NB: unionPkgsSpecs is left-biased: constraints from the
-                   -- SEED file override constraints from the cabal.config file.
-                 allAllowNewer
-           Just (Explicit pinnedLibs pinnedExes) -> do
-             let allPkgs = pkgs `Map.union` pinnedLibs `Map.union` pinnedExes
-             return $ cabalProjectContentsFromPackages allPkgs allAllowNewer
+             return $ cabalProjectContentsFromPackages pkgs pins allAllowNewer
+           Just (Explicit pins) -> do
+             return $ cabalProjectContentsFromPackages pkgs pins allAllowNewer
        return $ CabalFilesContents { cabalContents, projectContents }
 
 -- | Retrieve the seed packages we want to build, either from a seed file
 -- or from explicit command line arguments.
-parsePlanPackages :: Verbosity -> PackageData -> IO (PkgSpecs, PkgSpecs, AllowNewer)
-parsePlanPackages _ (Explicit libs exes) = return (libs, exes, AllowNewer [])
+parsePlanPackages :: Verbosity -> PackageData UnitSpecs -> IO (UnitSpecs, AllowNewer)
+parsePlanPackages _ (Explicit units) = return (units, AllowNewer Set.empty)
 parsePlanPackages verbosity (FromFile fp) =
   do normalMsg verbosity $
        "Reading seed packages from '" <> fp <> "'"

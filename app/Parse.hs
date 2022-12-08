@@ -5,14 +5,16 @@
 module Parse ( options, runOptionsParser ) where
 
 -- base
+import Data.Char
+  ( isSpace )
 import Data.Bool
   ( bool )
-import Data.Either
-  ( partitionEithers )
 
 -- containers
 import qualified Data.Map.Strict as Map
-  ( fromList, singleton )
+  ( empty, singleton )
+import qualified Data.Set as Set
+  ( empty, fromList, singleton )
 
 -- optparse-applicative
 import Options.Applicative
@@ -21,7 +23,7 @@ import Options.Applicative
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( pack, splitOn, unpack )
+  ( break, pack, unpack )
 
 -- build-env
 import CabalPlan
@@ -138,7 +140,7 @@ planInputs modeDesc = do
   return $ PlanInputs { planPins, planPkgs, planAllowNewer }
 
 -- | Parse a list of pinned packages from a 'cabal.config' freeze file.
-freeze :: ModeDescription -> Parser PackageData
+freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
 freeze modeDesc = FromFile <$> freezeFile
   where
     freezeFile :: Parser FilePath
@@ -151,7 +153,7 @@ freeze modeDesc = FromFile <$> freezeFile
 allowNewer :: Parser AllowNewer
 allowNewer =
   option readAllowNewer ( long "allow-newer" <> help "Allow-newer specification"
-                                             <> value (AllowNewer [])
+                                             <> value (AllowNewer Set.empty)
                                              <> metavar "PKG1:PKG2" )
   where
     readAllowNewer :: ReadM AllowNewer
@@ -164,7 +166,8 @@ allowNewer =
                      \Should be of the form: pkg1:pkg2,*:base,..."
 
     parseAllowNewer :: String -> Maybe AllowNewer
-    parseAllowNewer = fmap AllowNewer . traverse oneAllowNewer
+    parseAllowNewer = fmap ( AllowNewer . Set.fromList )
+                    . traverse oneAllowNewer
                     . splitOn ','
 
     oneAllowNewer :: String -> Maybe (Text, Text)
@@ -187,7 +190,7 @@ splitOn c = go
 
 -- | Parse a collection of package dependencies, either from a seed file
 -- or from explicit command-line arguments.
-dependencies :: ModeDescription -> Parser PackageData
+dependencies :: ModeDescription -> Parser ( PackageData UnitSpecs )
 dependencies modeDesc
   =   ( FromFile <$> seeds )
   <|> explicitPkgs
@@ -197,25 +200,22 @@ dependencies modeDesc
     seeds :: Parser FilePath
     seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
 
-    explicitPkgs :: Parser PackageData
+    explicitPkgs :: Parser ( PackageData UnitSpecs )
     explicitPkgs = do
-      pkgs <- some ( argument pkgSpec (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
-      return $
-        let (libs, exes) = partitionEithers pkgs
-        in  Explicit (Map.fromList libs) (Map.fromList exes)
+      pkgs <- some ( argument readPkgNm (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
+      return $ Explicit $
+        foldl unionUnitSpecsCombining Map.empty pkgs
 
-    pkgSpec :: ReadM (Either (PkgName, PkgSpec) (PkgName, PkgSpec))
-    pkgSpec = do
-      pkg <- str
+    readPkgNm :: ReadM UnitSpecs
+    readPkgNm = do
+      ln <- str
       return $
-        let spec = PkgSpec Nothing mempty
-                   -- TODO: flags & constraints not yet supported by
-                   -- the command-line interface; use a SEED file instead.
-        in case Text.splitOn ":" pkg of
-            "exe":pkgNm:[] -> Right ( PkgName pkgNm, spec )
-            "lib":pkgNm:[] -> Left  ( PkgName pkgNm, spec )
-            _:_:_          -> error $ "Cannot parse package name: " <> Text.unpack pkg
-            _              -> Left  ( PkgName pkg, spec )
+        let (pkgTyComp, rest) = Text.break isSpace ln
+            spec = parsePkgSpec rest
+        in case parsePkgComponent pkgTyComp of
+            Nothing -> error $ "Cannot parse package name: " <> Text.unpack ln
+            Just (pkgNm, comp) ->
+              Map.singleton pkgNm (spec, Set.singleton comp)
 
     pkgsHelp, seedsHelp :: String
     (pkgsHelp, seedsHelp) = (what <> " seed packages", what <> " seed file")
