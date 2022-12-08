@@ -34,22 +34,23 @@ import Target
 --------------------------------------------------------------------------------
 
 -- | Run the command-line options parser.
-runOptionsParser :: IO Opts
-runOptionsParser =
+runOptionsParser :: FilePath -> IO Opts
+runOptionsParser currWorkDir =
   customExecParser ( prefs showHelpOnEmpty ) $
-    info ( helper <*> options )
+    info ( helper <*> options currWorkDir )
       (  fullDesc
       <> header "build-env - compute, fetch and build cabal build plans" )
 
 -- | The command-line options parser for the 'build-env' executable.
-options :: Parser Opts
-options = do
+options :: FilePath -> Parser Opts
+options currWorkDir = do
   mode      <- optMode
   compiler  <- optCompiler
   cabal     <- optCabal
+  workDir   <- optChangeWorkingDirectory currWorkDir
   verbosity <- optVerbosity
   delTemp   <- optTempDirPermanence
-  return $ Opts { compiler, cabal, mode, verbosity, delTemp }
+  return $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
@@ -71,6 +72,14 @@ optCabal = do
                       <> help "Pass argument to 'cabal'"
                       <> metavar "ARG" )
   return $ Cabal { cabalPath, globalCabalArgs }
+
+-- | Parse a @cwd@ (change working directory) option.
+optChangeWorkingDirectory :: FilePath -> Parser FilePath
+optChangeWorkingDirectory currWorkDir =
+    option str
+      (  long "cwd" <> value currWorkDir
+      <> help "Set working directory"
+      <> metavar "DIR" )
 
 -- | Parse verbosity.
 optVerbosity :: Parser Verbosity

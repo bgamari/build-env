@@ -75,7 +75,9 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>), (<.>) )
+  ( (</>), (<.>)
+  , isAbsolute
+  )
 
 -- text
 import Data.Text
@@ -149,8 +151,8 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
 
 -- | The contents of a dummy @cabal.project@ file, specifying
 -- package constraints, flags and allow-newer.
-cabalProjectContentsFromPackages :: UnitSpecs -> PkgSpecs -> AllowNewer -> Text
-cabalProjectContentsFromPackages units pins (AllowNewer allowNewer) =
+cabalProjectContentsFromPackages :: FilePath -> UnitSpecs -> PkgSpecs -> AllowNewer -> Text
+cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) =
       packages
    <> allowNewers
    <> flagSpecs
@@ -162,7 +164,15 @@ cabalProjectContentsFromPackages units pins (AllowNewer allowNewer) =
       = "packages: .\n\n"
       | otherwise
       = Text.intercalate ",\n          "
-        ( "packages: ." : map Text.pack ( Map.elems localPkgs ) )
+        ( "packages: ." : map ( Text.pack . makeAbsolute ) ( Map.elems localPkgs ) )
+      <> "\n"
+
+    makeAbsolute :: FilePath -> FilePath
+    makeAbsolute fp
+      | isAbsolute fp
+      = fp
+      | otherwise
+      = workDir </> fp
 
     isLocal :: (PkgSrc, PkgSpec, Set ComponentName) -> Maybe FilePath
     isLocal ( Local src, _, _ ) = Just src
@@ -227,9 +237,6 @@ cabalFileContentsFromPackages units =
             , not (null exesInPkg) ]
 
     dep (PkgName pkg) [comp]
-      | pkg == comp
-      = pkg
-      | otherwise
       = pkg <> ":" <> comp
     dep (PkgName pkg) comps
       = pkg <> ":{" <> Text.intercalate "," comps <> "}"
@@ -242,6 +249,8 @@ cabalFileContentsFromPackages units =
           <> Text.intercalate ",\n"
                [ "    " <> dep pkg libs
                | (pkg, libs) <- allLibs ]
+      <> "\n"
+
     exeDepends
       | null allExes
       = ""
@@ -250,6 +259,7 @@ cabalFileContentsFromPackages units =
           <> Text.intercalate ",\n"
                [ "    " <> dep pkg exes
                | (pkg, exes) <- allExes ]
+      <> "\n"
 
 -- | The file contents of the cabal files of a cabal project;
 -- @pkg.cabal@ and @cabal.project@.

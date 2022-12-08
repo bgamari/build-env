@@ -16,6 +16,7 @@ data Opts = Opts { compiler  :: Compiler
                  , mode      :: Mode
                  , verbosity :: Verbosity
                  , delTemp   :: TempDirPermanence
+                 , workDir   :: FilePath
                  }
   deriving stock Show
 
