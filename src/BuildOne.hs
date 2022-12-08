@@ -128,6 +128,7 @@ buildUnit verbosity
              userConfigureArgs userGhcPkgArgs
              plan unit setupHs
   = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
+        thisUnitId = Text.unpack (unUnitId $ Configured.puId unit)
         printableName
           | verbosity >= Verbose
           = packageNameVer <> ":" <> compName
@@ -171,12 +172,14 @@ buildUnit verbosity
                  -> []
                  | otherwise
                  -> [ "--flags=" ++ Text.unpack (showFlagSpec flags) ]
+             buildDir = srcDir </> "dist" </> thisUnitId
              configureArgs = [ "--with-compiler", ghcPath
                              , "--prefix", prefix
                              , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
                              , "--package-db=" ++ tempPkgDbDir
                              , "--exact-configuration"
                              , "--datasubdir=" ++ packageNameVer
+                             , "--builddir=" ++ buildDir
                              , setupVerbosity verbosity
                              ] ++ flagsArg
                                ++ userConfigureArgs
@@ -214,7 +217,9 @@ buildUnit verbosity
         ; callProcess $
             CP { cwd          = srcDir
                , prog         = setupExe
-               , args         = ["build", setupVerbosity verbosity]
+               , args         = [ "build"
+                                , "--builddir=" ++ buildDir
+                                , setupVerbosity verbosity]
                , extraPATH    = []
                , extraEnvVars = [] }
 
@@ -225,6 +230,7 @@ buildUnit verbosity
             CP { cwd          = srcDir
                , prog         = setupExe
                , args         = [ "copy", setupVerbosity verbosity
+                                , "--builddir=" ++ buildDir
                                 , "--destdir", destDir ]
                , extraPATH    = []
                , extraEnvVars = [] }
@@ -234,7 +240,7 @@ buildUnit verbosity
         { Lib ->
     do  { -- Register library (in both the local and final package databases)
           -- See Note [Using two package databases].
-        ; let pkgRegsFile = srcDir </> "pkg-reg.conf"
+        ; let pkgRegsFile = srcDir </> ( thisUnitId <> "-pkg-reg.conf" )
               dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
                      , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
 
@@ -250,6 +256,7 @@ buildUnit verbosity
             CP { cwd          = srcDir
                , prog         = setupExe
                , args         = [ "register", setupVerbosity verbosity
+                                , "--builddir=" ++ buildDir
                                 , "--gen-pkg-config=" ++ pkgRegsFile
                                 ] ++ extraSetupArgs
                , extraPATH    = []
