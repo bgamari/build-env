@@ -387,8 +387,10 @@ buildPlan verbosity comp fetchDir0 destDir0
 
     debugMsg verbosity $ "Units to build:\n" <>
       Text.unlines
-        [ "  - " <> cabalComponent compName
-        | ConfiguredUnit { puComponentName = compName } <- unitsToBuild
+        [ "  - " <> pkgNm <> ":" <> cabalComponent compName
+        | ConfiguredUnit
+          { puPkgName = PkgName pkgNm
+          , puComponentName = compName } <- unitsToBuild
         ]
 
     case buildStrat of
