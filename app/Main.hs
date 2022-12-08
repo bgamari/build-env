@@ -17,6 +17,10 @@ import qualified Data.Set as Set
 -- directory
 import System.Directory
 
+-- text
+import qualified Data.Text as Text
+  ( pack )
+
 -- build-env
 import Build
 import CabalPlan
@@ -40,7 +44,7 @@ main = do
         CabalPlanBinary planBinary <-
           computePlanFromInputs delTemp verbosity workDir compiler cabal planModeInputs
         normalMsg verbosity $
-          "Writing build plan to '" <> planOutput <> "'"
+          "Writing build plan to '" <> Text.pack planOutput <> "'"
         Lazy.ByteString.writeFile planOutput planBinary
       FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal fetchInputPlan
@@ -75,7 +79,7 @@ parsePlanInputs verbosity workDir (PlanInputs { planPins, planUnits, planAllowNe
            Nothing -> return $ cabalProjectContentsFromPackages workDir pkgs Map.empty allAllowNewer
            Just (FromFile pinCabalConfig) -> do
              normalMsg verbosity $
-               "Reading 'cabal.config' file at '" <> pinCabalConfig <> "'"
+               "Reading 'cabal.config' file at '" <> Text.pack pinCabalConfig <> "'"
              pins <- parseCabalDotConfigPkgs pinCabalConfig
              return $ cabalProjectContentsFromPackages workDir pkgs pins allAllowNewer
            Just (Explicit pins) -> do
@@ -88,7 +92,7 @@ parsePlanUnits :: Verbosity -> PackageData UnitSpecs -> IO (UnitSpecs, AllowNewe
 parsePlanUnits _ (Explicit units) = return (units, AllowNewer Set.empty)
 parsePlanUnits verbosity (FromFile fp) =
   do normalMsg verbosity $
-       "Reading seed packages from '" <> fp <> "'"
+       "Reading seed packages from '" <> Text.pack fp <> "'"
      parseSeedFile fp
 
 -- | Compute a build plan by calling @cabal build --dry-run@ with the generated
@@ -120,7 +124,7 @@ getPlan delTemp verbosity workDir comp cabal planMode = do
        UsePlan { planJSONPath } ->
          do
            normalMsg verbosity $
-             "Reading build plan from '" <> planJSONPath <> "'"
+             "Reading build plan from '" <> Text.pack planJSONPath <> "'"
            CabalPlanBinary <$> Lazy.ByteString.readFile planJSONPath
    return $ parsePlanBinary planBinary
 
@@ -148,7 +152,7 @@ doFetch verbosity cabal fetchDir0 weAreFetching newOrUpd plan = do
     _ -> return ()
   createDirectoryIfMissing True fetchDir
   normalMsg verbosity $
-    "Fetching sources from build plan into directory '" <> fetchDir <> "'"
+    "Fetching sources from build plan into directory '" <> Text.pack fetchDir <> "'"
   fetchPlan verbosity cabal fetchDir plan
 
   where

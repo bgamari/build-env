@@ -23,6 +23,12 @@ import System.Directory
 import System.FilePath
   ( (</>), dropDrive )
 
+-- text
+import Data.Text
+  ( Text )
+import qualified Data.Text.IO as Text
+  ( putStrLn )
+
 --------------------------------------------------------------------------------
 
 -- | Path to the @cabal@ executable.
@@ -55,10 +61,10 @@ pattern Normal  = Verbosity 1
 pattern Verbose = Verbosity 2
 pattern Debug   = Verbosity 3
 
-normalMsg, verboseMsg, debugMsg :: Verbosity -> String -> IO ()
-normalMsg  v msg = when (v >= Normal ) $ putStrLn msg
-verboseMsg v msg = when (v >= Verbose) $ putStrLn msg
-debugMsg   v msg = when (v >= Debug  ) $ putStrLn msg
+normalMsg, verboseMsg, debugMsg :: Verbosity -> Text -> IO ()
+normalMsg  v msg = when (v >= Normal ) $ Text.putStrLn msg
+verboseMsg v msg = when (v >= Verbose) $ Text.putStrLn msg
+debugMsg   v msg = when (v >= Debug  ) $ Text.putStrLn msg
 
 cabalVerbosity :: Verbosity -> String
 cabalVerbosity (Verbosity i)

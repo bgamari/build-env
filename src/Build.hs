@@ -128,7 +128,7 @@ computePlan :: TempDirPermanence
             -> IO CabalPlanBinary
 computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, projectContents } ) =
   withTempDir delTemp "build" \ dir -> do
-    verboseMsg verbosity $ "Computing plan in build directory " ++ dir
+    verboseMsg verbosity $ "Computing plan in build directory " <> Text.pack dir
     Text.writeFile (dir </> "cabal" <.> "project") projectContents
     Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents
     let cabalBuildArgs =
@@ -138,7 +138,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
             , "--with-compiler", ghcPath comp
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
-      unlines $ "cabal" : map ("  " <>) cabalBuildArgs
+      Text.unlines $ "cabal" : map ( ("  " <>) . Text.pack ) cabalBuildArgs
     callProcessInIO $
       CP { cwd          = dir
          , prog         = cabalPath cabal
@@ -281,11 +281,12 @@ fetchPlan :: Verbosity
           -> IO ()
 fetchPlan verbosity cabal fetchDir cabalPlan =
     for_ pkgs \ (pkgNm, pkgVer) -> do
-      let nameVersion = Text.unpack $ pkgNameVersion pkgNm pkgVer
-      pkgDirExists <- doesDirectoryExist (fetchDir </> nameVersion)
+      let nameVersion = pkgNameVersion pkgNm pkgVer
+          nmVerStr = Text.unpack nameVersion
+      pkgDirExists <- doesDirectoryExist (fetchDir </> nmVerStr)
       if   pkgDirExists
       then normalMsg verbosity $ "NOT fetching " <> nameVersion
-      else cabalFetch verbosity cabal fetchDir nameVersion
+      else cabalFetch verbosity cabal fetchDir nmVerStr
   where
     pkgs :: Set (PkgName, Version)
     pkgs = Set.fromList
@@ -304,7 +305,7 @@ fetchPlan verbosity cabal fetchDir cabalPlan =
 -- | Call @cabal get@ to fetch a single package from Hackage.
 cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
 cabalFetch verbosity cabal root pkgNmVer = do
-    normalMsg verbosity $ "Fetching " <> pkgNmVer
+    normalMsg verbosity $ "Fetching " <> Text.pack pkgNmVer
     let args = globalCabalArgs cabal ++
                  [ "get"
                  , pkgNmVer
@@ -357,13 +358,13 @@ buildPlan verbosity comp fetchDir0 destDir0
 
     normalMsg verbosity $ "\nPreparing packages for build"
     verboseMsg verbosity $
-      unlines [ "Directory structure:"
-              , "      prefix: " <> prefix
-              , "     destDir: " <> destDir
-              , "  installDir: " <> installDir ]
+      Text.unlines [ "Directory structure:"
+                   , "      prefix: " <> Text.pack prefix
+                   , "     destDir: " <> Text.pack destDir
+                   , "  installDir: " <> Text.pack installDir ]
     debugMsg verbosity $ "Packages:\n" <>
-      unlines
-        [ "  - " <> Text.unpack (pkgNameVersion nm ver)
+      Text.unlines
+        [ "  - " <> pkgNameVersion nm ver
         | (nm, ver) <- Map.keys pkgs ]
 
     let forPkgs :: Traversable t => t a -> (a -> IO b) -> IO (t b)
@@ -385,8 +386,8 @@ buildPlan verbosity comp fetchDir0 destDir0
                depMap pu setupHs
 
     debugMsg verbosity $ "Units to build:\n" <>
-      unlines
-        [ ("  - " <>) $ Text.unpack $ cabalComponent compName
+      Text.unlines
+        [ "  - " <> cabalComponent compName
         | ConfiguredUnit { puComponentName = compName } <- unitsToBuild
         ]
 
@@ -408,7 +409,7 @@ buildPlan verbosity comp fetchDir0 destDir0
                             \NB: pass --async for increased parallelism."
         for_ unitsToBuild (runBuildScript . unitBuildScript)
       Script fp -> do
-        normalMsg verbosity $ "Writing build script to " <> fp
+        normalMsg verbosity $ "Writing build script to " <> Text.pack fp
         Text.writeFile fp (script $ concatMap unitBuildScript unitsToBuild)
 
   where
