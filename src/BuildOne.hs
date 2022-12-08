@@ -98,13 +98,17 @@ buildUnit verbosity
               pkgNameVersion
                 (Configured.puPkgName unit)
                 (Configured.puVersion unit)
-             srcDir = srcsDir </> packageNameVer
+             srcDir
+               | Local src <- puPkgSrc unit
+               = src
+               | otherwise
+               = srcsDir </> packageNameVer
              tempPkgDbDir  = srcsDir    </> "package.conf"
              finalPkgDbDir = installDir </> "package.conf"
        ; tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
        ; when tempPkgDbExists $
           removeDirectoryRecursive tempPkgDbDir
-            `catch` \ (_ :: IOException ) -> return ()
+            `catch` \ ( _ :: IOException ) -> return ()
        ; mapM_ (createDirectoryIfMissing True) [ tempPkgDbDir, finalPkgDbDir ]
 
        -- Find the appropriate Setup.hs file (creating one if necessary)

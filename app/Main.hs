@@ -65,8 +65,8 @@ main = do
 --  - a @cabal.config@ freeze file,
 --  - explicit packages and allow-newer specified as command-line arguments.
 parsePlanInputs :: Verbosity -> PlanInputs -> IO CabalFilesContents
-parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
-  = do (pkgs, fileAllowNewer) <- parsePlanPackages verbosity planPkgs
+parsePlanInputs verbosity (PlanInputs { planPins, planUnits, planAllowNewer })
+  = do (pkgs, fileAllowNewer) <- parsePlanUnits verbosity planUnits
        let
          allAllowNewer = fileAllowNewer <> planAllowNewer
            -- NB: allow-newer specified in the command-line overrides
@@ -84,11 +84,11 @@ parsePlanInputs verbosity (PlanInputs { planPins, planPkgs, planAllowNewer })
              return $ cabalProjectContentsFromPackages pkgs pins allAllowNewer
        return $ CabalFilesContents { cabalContents, projectContents }
 
--- | Retrieve the seed packages we want to build, either from a seed file
+-- | Retrieve the seed units we want to build, either from a seed file
 -- or from explicit command line arguments.
-parsePlanPackages :: Verbosity -> PackageData UnitSpecs -> IO (UnitSpecs, AllowNewer)
-parsePlanPackages _ (Explicit units) = return (units, AllowNewer Set.empty)
-parsePlanPackages verbosity (FromFile fp) =
+parsePlanUnits :: Verbosity -> PackageData UnitSpecs -> IO (UnitSpecs, AllowNewer)
+parsePlanUnits _ (Explicit units) = return (units, AllowNewer Set.empty)
+parsePlanUnits verbosity (FromFile fp) =
   do normalMsg verbosity $
        "Reading seed packages from '" <> fp <> "'"
      parseSeedFile fp

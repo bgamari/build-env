@@ -58,7 +58,7 @@ import qualified Data.Graph as Graph
 import Data.Map.Strict
   ( Map )
 import qualified Data.Map.Strict as Map
-  ( (!?), assocs, fromList )
+  ( (!?), assocs, elems, fromList, mapMaybe )
 import qualified Data.Map.Lazy as Lazy
   ( Map )
 import qualified Data.Map.Lazy as Lazy.Map
@@ -81,7 +81,7 @@ import System.FilePath
 import Data.Text
   ( Text )
 import qualified Data.Text    as Text
-  ( all, intercalate, unlines, unpack, unwords )
+  ( all, intercalate, pack, unlines, unpack, unwords )
 import qualified Data.Text.IO as Text
   ( writeFile )
 
@@ -151,13 +151,27 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
 -- package constraints, flags and allow-newer.
 cabalProjectContentsFromPackages :: UnitSpecs -> PkgSpecs -> AllowNewer -> Text
 cabalProjectContentsFromPackages units pins (AllowNewer allowNewer) =
-     "packages: .\n\n"
+      packages
    <> allowNewers
    <> flagSpecs
    <> constraints
   where
 
-    allPkgs = fmap fst units `unionPkgSpecsOverriding` pins
+    packages
+      | null localPkgs
+      = "packages: .\n\n"
+      | otherwise
+      = Text.intercalate ",\n          "
+        ( "packages: ." : map Text.pack ( Map.elems localPkgs ) )
+
+    isLocal :: (PkgSrc, PkgSpec, Set ComponentName) -> Maybe FilePath
+    isLocal ( Local src, _, _ ) = Just src
+    isLocal _ = Nothing
+    localPkgs = Map.mapMaybe isLocal units
+
+    allPkgs = fmap ( \ ( _, spec, _ ) -> spec ) units
+            `unionPkgSpecsOverriding`
+              pins
       -- Constraints from the SEED file (units) should override
       -- constraints from the cabal.config file (pins).
 
@@ -204,11 +218,11 @@ cabalFileContentsFromPackages units =
     isLib (ComponentName ty lib) = case ty of { Lib -> Just lib; _ -> Nothing }
     isExe (ComponentName ty exe) = case ty of { Exe -> Just exe; _ -> Nothing }
     allLibs = [ (pkg, libsInPkg)
-              | (pkg, (_, comps)) <- Map.assocs units
+              | (pkg, (_, _, comps)) <- Map.assocs units
               , let libsInPkg = mapMaybe isLib $ Set.toList comps
               , not (null libsInPkg) ]
     allExes = [ (pkg, exesInPkg)
-            | (pkg, (_, comps)) <- Map.assocs units
+            | (pkg, (_, _, comps)) <- Map.assocs units
             , let exesInPkg = mapMaybe isExe $ Set.toList comps
             , not (null exesInPkg) ]
 
@@ -267,13 +281,13 @@ fetchPlan verbosity cabal fetchDir cabalPlan =
     pkgs = Set.fromList
                -- Some packages might have multiple components;
                -- we don't want to fetch the package itself multiple times.
-         $ mapMaybe relevantPkgNameVersion
+         $ mapMaybe remotePkgNameVersion
          $ planUnits cabalPlan
 
-    relevantPkgNameVersion :: PlanUnit -> Maybe (PkgName, Version)
-    relevantPkgNameVersion = \case
-      PU_Configured ( ConfiguredUnit { puId = unitId, puPkgName = nm, puVersion = ver } )
-        | unitId /= dummyUnitId
+    remotePkgNameVersion :: PlanUnit -> Maybe (PkgName, Version)
+    remotePkgNameVersion = \case
+      PU_Configured ( ConfiguredUnit { puPkgName = nm, puVersion = ver, puPkgSrc = src } )
+        | Remote <- src -- only fetch remote packages
         -> Just (nm, ver)
       _ -> Nothing
 

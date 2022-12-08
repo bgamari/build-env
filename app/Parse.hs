@@ -12,7 +12,7 @@ import Data.Bool
 
 -- containers
 import qualified Data.Map.Strict as Map
-  ( empty, singleton )
+  ( empty, fromList, singleton )
 import qualified Data.Set as Set
   ( empty, fromList, singleton )
 
@@ -23,7 +23,7 @@ import Options.Applicative
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( break, pack, unpack )
+  ( break, pack, unpack, words )
 
 -- build-env
 import CabalPlan
@@ -133,11 +133,11 @@ modeDescription modeDesc =
 planInputs :: ModeDescription -> Parser PlanInputs
 planInputs modeDesc = do
 
-  planPkgs <- dependencies modeDesc
+  planUnits <- dependencies modeDesc
   planPins <- optional (freeze modeDesc)
   planAllowNewer <- allowNewer
 
-  return $ PlanInputs { planPins, planPkgs, planAllowNewer }
+  return $ PlanInputs { planPins, planUnits, planAllowNewer }
 
 -- | Parse a list of pinned packages from a 'cabal.config' freeze file.
 freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
@@ -188,26 +188,48 @@ splitOn c = go
       | (a,as) <- break (== c) s
       = a : go (drop 1 as)
 
--- | Parse a collection of package dependencies, either from a seed file
+-- | Parse a collection of seed dependencies, either from a seed file
 -- or from explicit command-line arguments.
 dependencies :: ModeDescription -> Parser ( PackageData UnitSpecs )
 dependencies modeDesc
   =   ( FromFile <$> seeds )
-  <|> explicitPkgs
+  <|> explicitUnits
 
   where
 
     seeds :: Parser FilePath
     seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
 
-    explicitPkgs :: Parser ( PackageData UnitSpecs )
-    explicitPkgs = do
-      pkgs <- some ( argument readPkgNm (metavar "PKG1 PKG2 ..." <> help pkgsHelp) )
+    explicitUnits :: Parser ( PackageData UnitSpecs )
+    explicitUnits = do
+      units  <- some ( argument readUnitSpec (metavar "UNIT1 UNIT2 ..." <> help unitsHelp) )
+      locals <- many localPkg
       return $ Explicit $
-        foldl unionUnitSpecsCombining Map.empty pkgs
+        foldl unionUnitSpecsCombining Map.empty units
+         `unionUnitSpecsCombining`
+           Map.fromList
+             [ (pkg, (Local loc, emptyPkgSpec, mempty))
+             | (pkg, loc) <- locals ]
 
-    readPkgNm :: ReadM UnitSpecs
-    readPkgNm = do
+    localPkg :: Parser (PkgName, FilePath)
+    localPkg =
+      option readLocalPkg
+        ( long "local"
+        <> help "Local package source location"
+        <> metavar "\"PKG ABS_PATH\"" )
+
+    readLocalPkg :: ReadM (PkgName, FilePath)
+    readLocalPkg = do
+      ln <- str
+      return $ case Text.words ln of
+        pkg:loc:_
+          | validPackageName pkg
+          -> (PkgName pkg, Text.unpack loc)
+        _ -> error "Could not parse --local argument\n\
+                   \Valid usage is of the form: --local \"PKG ABSOLUTE_PATH\""
+
+    readUnitSpec :: ReadM UnitSpecs
+    readUnitSpec = do
       ln <- str
       return $
         let (pkgTyComp, rest) = Text.break isSpace ln
@@ -215,10 +237,10 @@ dependencies modeDesc
         in case parsePkgComponent pkgTyComp of
             Nothing -> error $ "Cannot parse package name: " <> Text.unpack ln
             Just (pkgNm, comp) ->
-              Map.singleton pkgNm (spec, Set.singleton comp)
+              Map.singleton pkgNm (Remote, spec, Set.singleton comp)
 
-    pkgsHelp, seedsHelp :: String
-    (pkgsHelp, seedsHelp) = (what <> " seed packages", what <> " seed file")
+    unitsHelp, seedsHelp :: String
+    (unitsHelp, seedsHelp) = (what <> " seed units", what <> " seed file")
       where
         what = modeDescription modeDesc
 

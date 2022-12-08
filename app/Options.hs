@@ -40,7 +40,7 @@ data Mode
   | BuildMode Build
   deriving stock Show
 
--- | How to specify which packages/units to build/constrain.
+-- | How to specify which packages/units to constraint/build.
 data PackageData pkgs
   -- | Explicit description of packages/units.
   = Explicit pkgs
@@ -60,7 +60,7 @@ data PackageData pkgs
 -- | Inputs for the computation of a cabal plan.
 data PlanInputs
   = PlanInputs
-    { planPkgs       :: PackageData UnitSpecs
+    { planUnits      :: PackageData UnitSpecs
       -- ^ Seed dependencies for the build plan.
     , planPins       :: Maybe (PackageData PkgSpecs)
       -- ^ Additional package constraints.

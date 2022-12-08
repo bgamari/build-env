@@ -203,6 +203,7 @@ data ConfiguredUnit
     , puDepends       :: [UnitId]
     , puExeDepends    :: [UnitId]
     , puSetupDepends  :: [UnitId]
+    , puPkgSrc        :: PkgSrc
     }
   deriving stock Show
 
@@ -240,6 +241,7 @@ instance FromJSON PlanUnit where
            puVersion <- o .:  "pkg-version"
            puFlags   <- fromMaybe (FlagSpec Map.empty) <$> o .:? "flags"
            mbComps   <- o .:? "components"
+           puPkgSrc  <- o .:  "pkg-src"
            (puComponentName, puDepends, puExeDepends, puSetupDepends) <-
              case mbComps of
                Nothing -> do
@@ -269,6 +271,17 @@ instance FromJSON PlanUnit where
                      Just setup -> setup .: "depends"
                  return (ComponentName Lib (unPkgName puPkgName), deps, exeDeps, setupDeps)
            return $ ConfiguredUnit {..}
+instance FromJSON PkgSrc where
+    parseJSON = withObject "package source" \ o -> do
+      ty <- o .: "type"
+      case ty :: Text of
+        "local"       -> Local <$> o .: "path"
+        "repo-tar"    -> return Remote
+                         -- <$> o .: "repo"
+        _ ->
+          error $
+               "parseJSON PkgSrc: unsupported 'pkg-src' field: "
+            <> Text.unpack ty
 
 --------------------------
 
@@ -285,7 +298,23 @@ type PkgSpecs = Strict.Map PkgName PkgSpec
 
 -- | A mapping from a package name to its flags, constraints,
 -- and components we want to build from it.
-type UnitSpecs = Strict.Map PkgName (PkgSpec, Set ComponentName)
+type UnitSpecs = Strict.Map PkgName (PkgSrc, PkgSpec, Set ComponentName)
+
+-- | The source location of a package.
+--
+-- @Nothing@: it's in the package database (e.g. Hackage).
+-- @Just fp@: specified by the @cabal@ file at the given path.
+data PkgSrc
+  = Remote
+  | Local FilePath
+  deriving stock Show
+
+instance Semigroup PkgSrc where
+  Remote <> b = b
+  a <> _      = a
+
+instance Monoid PkgSrc where
+  mempty = Remote
 
 -- | A collection of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
 newtype AllowNewer = AllowNewer ( Set (Text, Text) )
@@ -297,6 +326,10 @@ data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
                        , psFlags :: FlagSpec
                        }
   deriving stock Show
+
+-- | No flags or constraints on a package.
+emptyPkgSpec :: PkgSpec
+emptyPkgSpec = PkgSpec Nothing mempty
 
 parsePkgSpec :: Text -> PkgSpec
 parsePkgSpec l = parseSpec Map.empty ( Text.words l )

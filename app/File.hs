@@ -1,3 +1,5 @@
+{-# LANGUAGE TypeApplications #-}
+
 module File
   ( parseCabalDotConfigPkgs, parseSeedFile )
   where
@@ -109,7 +111,10 @@ parseSeedFile fp = do
       | let (pkgTyComp, rest) = Text.break isSpace l
       , Just (pkgName, comp) <- parsePkgComponent pkgTyComp
       , let spec = parsePkgSpec rest
-            thisUnit = Map.singleton pkgName (spec, Set.singleton comp)
+            thisUnit = Map.singleton pkgName
+              (Remote, spec, Set.singleton comp)
+                -- we assume units in a seed file
+                -- don't refer to local packages
       = go (units `unionUnitSpecsCombining` thisUnit) ans ls
       | otherwise
       = error $ "Invalid package in seed file : " <> Text.unpack l
