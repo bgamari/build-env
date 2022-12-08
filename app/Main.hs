@@ -52,9 +52,6 @@ main = do
         case buildFetch of
           Prefetched     -> return ()
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
-        case buildStrategy of
-          Script fp -> normalMsg verbosity $ "Writing build script to " <> fp
-          _         -> normalMsg verbosity "Building and registering packages"
         buildPlan verbosity compiler fetchDir buildDestDir buildStrategy
           configureArgs ghcPkgArgs
           plan

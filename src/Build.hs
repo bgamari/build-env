@@ -46,7 +46,7 @@ import Data.Version
 
 -- async
 import Control.Concurrent.Async
-  ( async, wait )
+  ( async, forConcurrently, wait )
 
 -- bytestring
 import qualified Data.ByteString.Lazy as Lazy.ByteString
@@ -58,11 +58,11 @@ import qualified Data.Graph as Graph
 import Data.Map.Strict
   ( Map )
 import qualified Data.Map.Strict as Map
-  ( (!?), assocs, elems, fromList, mapMaybe )
+  ( (!?), assocs, elems, fromList, keys, lookup, mapMaybe )
 import qualified Data.Map.Lazy as Lazy
   ( Map )
 import qualified Data.Map.Lazy as Lazy.Map
-  ( fromList )
+  ( fromList, fromListWith )
 import Data.Set
   ( Set )
 import qualified Data.Set as Set
@@ -89,7 +89,7 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildOne
-  ( buildUnit )
+  ( buildUnit, preparePackage )
 import CabalPlan
 import Config
 import Script
@@ -355,55 +355,73 @@ buildPlan verbosity comp fetchDir0 destDir0
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
 
+    normalMsg verbosity $ "\nPreparing packages for build"
     verboseMsg verbosity $
-      unlines [ "       prefix: " <> prefix
-              , "      destDir: " <> destDir
-              , "   installDir: " <> installDir ]
+      unlines [ "Directory structure:"
+              , "      prefix: " <> prefix
+              , "     destDir: " <> destDir
+              , "  installDir: " <> installDir ]
+    debugMsg verbosity $ "Packages:\n" <>
+      unlines
+        [ "  - " <> Text.unpack (pkgNameVersion nm ver)
+        | (nm, ver) <- Map.keys pkgs ]
 
-    let prepareUnit :: ConfiguredUnit -> IO BuildScript
-        prepareUnit pu@(ConfiguredUnit { puPkgName, puComponentName }) = do
-          let srcDir = fetchDir
-              pkgConfigureArgs =
+    let forPkgs :: Traversable t => t a -> (a -> IO b) -> IO (t b)
+        forPkgs = case buildStrat of { Async -> forConcurrently; _ -> for }
+    setups <-
+      forPkgs pkgs \ ( nm, ver, pkgSrc ) ->
+        preparePackage fetchDir dest nm ver pkgSrc
+
+    let unitBuildScript :: ConfiguredUnit -> BuildScript
+        unitBuildScript pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) =
+          let pkgConfigureArgs =
                 lookupTargetArgs configureArgs puPkgName puComponentName
-          buildUnit verbosity comp srcDir dest
-            pkgConfigureArgs ghcPkgArgs
-            depMap pu
+              setupHs = case Map.lookup ( puPkgName, puVersion ) setups of
+                Nothing    -> error $ "buildPlan: could not find Setup.hs for "
+                                   <> Text.unpack (pkgNameVersion puPkgName puVersion)
+                Just setup -> setup
+          in buildUnit verbosity comp fetchDir dest
+               pkgConfigureArgs ghcPkgArgs
+               depMap pu setupHs
 
-    debugMsg verbosity $
-      "Units to build: " <>
-        unlines
-          ( map
-            ( Text.unpack . cabalComponent . puComponentName )
-            unitsToBuild
-          )
+    debugMsg verbosity $ "Units to build:\n" <>
+      unlines
+        [ ("  - " <>) $ Text.unpack $ cabalComponent compName
+        | ConfiguredUnit { puComponentName = compName } <- unitsToBuild
+        ]
 
     case buildStrat of
       Async -> do
-        -- First prepare all the units.
-        let prepUnit cu = do { steps <- prepareUnit cu; return (cu, steps) }
-        buildScripts <- for unitMap prepUnit
-
-        -- Then compile them asynchonously.
+        normalMsg verbosity "Building and registering packages asynchronously"
         unitAsyncs <- mfix \ unitAsyncs ->
-          let doPkgAsync :: (ConfiguredUnit, BuildScript) -> IO ()
-              doPkgAsync (pu, steps) = do
+          let doPkgAsync :: ConfiguredUnit -> IO ()
+              doPkgAsync pu = do
                   for_ (allDepends pu) \ depUnitId ->
                     for_ (unitAsyncs Map.!? depUnitId) \ cu ->
                       -- (Nothing for Preexisting packages)
                       wait cu
-                  runBuildScript steps
-           in traverse (async . doPkgAsync) buildScripts
+                  runBuildScript $ unitBuildScript pu
+           in for unitMap (async . doPkgAsync)
         mapM_ wait unitAsyncs
-
-      _ -> do
-        buildScripts <- for unitsToBuild prepareUnit
-        case buildStrat of
-          TopoSort ->
-            for_ buildScripts runBuildScript
-          Script fp ->
-            Text.writeFile fp (script $ concat buildScripts)
+      TopoSort -> do
+        normalMsg verbosity "Building and registering packages sequentially.\n\
+                            \NB: pass --async for increased parallelism."
+        for_ unitsToBuild (runBuildScript . unitBuildScript)
+      Script fp -> do
+        normalMsg verbosity $ "Writing build script to " <> fp
+        Text.writeFile fp (script $ concatMap unitBuildScript unitsToBuild)
 
   where
+
+    pkgs :: Lazy.Map (PkgName, Version) (PkgName, Version, PkgSrc)
+    pkgs = Lazy.Map.fromListWith comb
+      [ ( (puPkgName, puVersion), ( puPkgName, puVersion, puPkgSrc ) )
+      | ConfiguredUnit { puPkgName, puVersion, puPkgSrc } <- unitsToBuild ]
+      where
+         comb :: (PkgName, Version, PkgSrc)
+              -> (PkgName, Version, PkgSrc)
+              -> (PkgName, Version, PkgSrc)
+         comb ( n, v, s1 ) ( _, _, s2 ) = ( n, v, s1 <> s2 )
 
     unitsToBuild :: [ConfiguredUnit]
     unitsToBuild

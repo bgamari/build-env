@@ -8,7 +8,7 @@
 -- 'buildUnit' prepares the package and returns build instructions
 -- to configure, build and install the unit using the @Setup.hs@ script,
 -- registering it into a local package database using @ghc-pkg@.
-module BuildOne ( buildUnit ) where
+module BuildOne ( preparePackage, buildUnit ) where
 
 -- base
 import Control.Monad
@@ -17,6 +17,8 @@ import Control.Exception
   ( IOException, catch )
 import Data.Foldable
   ( for_ )
+import Data.Version
+  ( Version )
 
 -- containers
 import Data.Map.Strict
@@ -68,43 +70,28 @@ We also register the packages into the final package database using
 haven't been copied over yet.
 -}
 
-
--- | Prepare a single unit for building, and return build steps
--- to build it and register it in the package database.
+-- | Prepare a single package for building.
 --
--- You can run the build script with 'runBuildScript', or you can
--- turn it into a shell script with 'script'.
---
--- Note: this function will fail if the unit has already been registered.
-buildUnit :: Verbosity
-          -> Compiler  -- ^ which @ghc@ and @ghc-pkg@ executables to use
-          -> FilePath  -- ^ source directory for this specific unit
-          -> DestDir Canonicalised
-               -- ^ installation directory structure
-          -> Args      -- ^ extra @Setup configure@ arguments for this unit
-          -> Args      -- ^ extra @ghc-pkg register@ arguments
-          -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
-          -> ConfiguredUnit -- ^ the unit to build
-          -> IO BuildScript
-buildUnit verbosity
-             ( Compiler { ghcPath, ghcPkgPath } )
-             srcsDir ( DestDir { installDir, prefix, destDir } )
-             userConfigureArgs userGhcPkgArgs
-             plan unit
-  = do { -- Create the package database directories (if they don't already exist).
-         -- See Note [Using two package databases].
-       ; let printableName = Text.unpack $ componentName $ puComponentName unit
-             packageNameVer = Text.unpack $
-              pkgNameVersion
-                (Configured.puPkgName unit)
-                (Configured.puVersion unit)
+-- Returns the path to its @Setup@ script.
+preparePackage :: FilePath -- ^ overall source directory
+               -> DestDir Canonicalised
+                    -- ^ installation directory structure
+               -> PkgName -- ^ package name
+               -> Version -- ^ package version
+               -> PkgSrc
+               -> IO FilePath
+preparePackage srcsDir ( DestDir { installDir } ) nm ver pkgSource
+  = do { let packageNameVer = Text.unpack $ pkgNameVersion nm ver
              srcDir
-               | Local src <- puPkgSrc unit
+               | Local src <- pkgSource
                = src
                | otherwise
                = srcsDir </> packageNameVer
              tempPkgDbDir  = srcsDir    </> "package.conf"
              finalPkgDbDir = installDir </> "package.conf"
+
+         -- Create the package database directories (if they don't already exist).
+         -- See Note [Using two package databases].
        ; tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
        ; when tempPkgDbExists $
           removeDirectoryRecursive tempPkgDbDir
@@ -113,8 +100,52 @@ buildUnit verbosity
 
        -- Find the appropriate Setup.hs file (creating one if necessary)
        ; setupHs <- findSetupHs srcDir
+       ; return setupHs }
 
-       ; return $ execWriter $
+-- | Prepare a single unit for building, and return build steps
+-- to build it and register it in the package database.
+--
+-- You can run the build script with 'runBuildScript', or you can
+-- turn it into a shell script with 'script'.
+--
+-- Note: executing the build script will fail
+-- if the unit has already been installed/registered.
+buildUnit :: Verbosity
+          -> Compiler  -- ^ which @ghc@ and @ghc-pkg@ executables to use
+          -> FilePath  -- ^ overall source directory
+                       -- (the directory for this unit will be a subdirectory)
+          -> DestDir Canonicalised
+               -- ^ installation directory structure
+          -> Args      -- ^ extra @Setup configure@ arguments for this unit
+          -> Args      -- ^ extra @ghc-pkg register@ arguments
+          -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
+          -> ConfiguredUnit -- ^ the unit to build
+          -> FilePath       -- ^ the path of this unit's @Setup@ script
+          -> BuildScript
+buildUnit verbosity
+             ( Compiler { ghcPath, ghcPkgPath } )
+             srcsDir ( DestDir { installDir, prefix, destDir } )
+             userConfigureArgs userGhcPkgArgs
+             plan unit setupHs
+  = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
+        printableName
+          | verbosity >= Verbose
+          = packageNameVer <> ":" <> compName
+          | otherwise
+          = compName
+        packageNameVer = Text.unpack $
+         pkgNameVersion
+           (Configured.puPkgName unit)
+           (Configured.puVersion unit)
+        srcDir
+          | Local src <- puPkgSrc unit
+          = src
+          | otherwise
+          = srcsDir </> packageNameVer
+        tempPkgDbDir  = srcsDir    </> "package.conf"
+        finalPkgDbDir = installDir </> "package.conf"
+
+    in execWriter
 
     do { logMessage verbosity Normal $ "Building " <> printableName
 
@@ -237,13 +268,13 @@ buildUnit verbosity
                , extraEnvVars = [] }
             -- NB: we have configured & built a single target,
             -- so there should be a single "pkg-reg.conf" file.
-         }
+        }
 
-         ; _notALib -> return ()
+        ; _notALib -> return ()
         }
 
       ; logMessage verbosity Normal $ "Installed " <> printableName
-      } }
+      }
 
 ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
 ghcVerbosity (Verbosity i)
