@@ -100,7 +100,7 @@ import qualified Data.Text as Text
 -------------------------------------------------------------------------------
 -- Build plans
 
--- | Units in a @cabal@ @plan.json@ file.
+-- | Units in a Cabal @plan.json@ file.
 data CabalPlan = CabalPlan { planUnits :: [PlanUnit] }
 
 mapMaybePlanUnits :: (PlanUnit -> Maybe a) -> CabalPlan -> [a]
@@ -132,7 +132,7 @@ newtype PkgName = PkgName { unPkgName :: Text }
     deriving stock   Show
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
--- | The name + version string of a package.
+-- | The @name-version@ string of a package.
 pkgNameVersion :: PkgName -> Version -> Text
 pkgNameVersion (PkgName n) v = n <> "-" <> Text.pack (showVersion v)
 
@@ -141,7 +141,7 @@ pkgNameVersion (PkgName n) v = n <> "-" <> Text.pack (showVersion v)
 validPackageName :: Text -> Bool
 validPackageName = Text.all ( \ x -> isAlphaNum x || x == '-' )
 
--- | A @cabal@ mangled package name, in which @-@ has been replaced with @_@.
+-- | A Cabal mangled package name, in which @-@ has been replaced with @_@.
 mangledPkgName :: PkgName -> String
 mangledPkgName = map fixupChar . Text.unpack . unPkgName
   where
@@ -166,6 +166,7 @@ data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
 emptyPkgSpec :: PkgSpec
 emptyPkgSpec = PkgSpec Nothing mempty
 
+-- | Parse flags and constraints (in that order).
 parsePkgSpec :: Text -> PkgSpec
 parsePkgSpec l = parseSpec Map.empty ( Text.words l )
   where
@@ -235,8 +236,8 @@ flagSpecIsEmpty (FlagSpec fs) = null fs
 
 -- | The source location of a package.
 --
--- @Nothing@: it's in the package database (e.g. Hackage).
--- @Just fp@: specified by the @cabal@ file at the given path.
+--   - @Nothing@: it's in the package database (e.g. Hackage).
+--   - @Just fp@: specified by the @cabal@ file at the given path.
 data PkgSrc
   = Remote
   | Local FilePath
@@ -265,7 +266,7 @@ instance FromJSON PkgSrc where
 -- Units
 
 -- | A unique identifier for a unit,
--- e.g. @lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401@
+-- e.g. @lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401@.
 newtype UnitId = UnitId { unUnitId :: Text }
     deriving stock Show
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)

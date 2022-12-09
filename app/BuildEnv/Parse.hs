@@ -169,18 +169,20 @@ freeze modeDesc = FromFile <$> freezeFile
 -- | Parse @allow-newer@ options.
 allowNewer :: Parser AllowNewer
 allowNewer =
-  option readAllowNewer ( long "allow-newer" <> help "Allow-newer specification"
-                                             <> value (AllowNewer Set.empty)
-                                             <> metavar "PKG1:PKG2" )
+  option readAllowNewer
+    (  long "allow-newer" <> help "Allow-newer specification"
+    <> value (AllowNewer Set.empty)
+    <> metavar "PKG1:PKG2" )
   where
     readAllowNewer :: ReadM AllowNewer
     readAllowNewer = do
       allowNewerString <- str
       case parseAllowNewer allowNewerString of
         Just an -> return an
-        Nothing -> readerError $
-                     "Invalid allow-newer specification.\n\
-                     \Should be of the form: pkg1:pkg2,*:base,..."
+        Nothing ->
+          readerError $
+            "Invalid allow-newer specification.\n" ++
+            "Should be of the form: pkg1:pkg2,*:base,..."
 
     parseAllowNewer :: String -> Maybe AllowNewer
     parseAllowNewer = fmap ( AllowNewer . Set.fromList )
@@ -242,8 +244,9 @@ dependencies modeDesc
         pkg:loc:_
           | validPackageName pkg
           -> return (PkgName pkg, Text.unpack loc)
-        _ -> readerError "Could not parse --local argument\n\
-                         \Valid usage is of the form: --local \"PKG ABSOLUTE_PATH\""
+        _ -> readerError $
+              "Could not parse --local argument\n" ++
+              "Valid usage is of the form: --local \"PKG PATH\""
 
     readUnitSpec :: ReadM UnitSpecs
     readUnitSpec = do

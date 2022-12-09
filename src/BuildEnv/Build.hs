@@ -5,7 +5,7 @@
 -- Module      :  BuildEnv.Build
 -- Description :  Computing, fetching and building plans
 --
--- 'computePlan' computes a @cabal@ plan by generating @pkg.cabal@ and
+-- 'computePlan' computes a Cabal plan by generating @pkg.cabal@ and
 -- @cabal.project@ files with the given dependencies, constraints, flags...,
 -- calling @cabal build --dry-run@ to compute a build plan, and parsing
 -- the resulting @plan.json@ file.
@@ -220,7 +220,7 @@ cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) =
         , not $ flagSpecIsEmpty flags
         ]
 
--- | The contents of a dummy @cabal@ file with dependencies on
+-- | The contents of a dummy Cabal file with dependencies on
 -- the specified units (without any constraints).
 --
 -- The corresponding package Id is 'dummyPackageId'.
@@ -270,12 +270,12 @@ cabalFileContentsFromPackages units =
                | (pkg, exes) <- allExes ]
       <> "\n"
 
--- | The file contents of the cabal files of a cabal project;
+-- | The file contents of the Cabal files of a Cabal project:
 -- @pkg.cabal@ and @cabal.project@.
 data CabalFilesContents
   = CabalFilesContents
     { cabalContents   :: Text
-      -- ^ The package @.cabal@ file contents.
+      -- ^ The package Cabal file contents.
     , projectContents :: Text
       -- ^ The @cabal.project@ file contents.
     }

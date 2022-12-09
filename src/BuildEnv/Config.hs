@@ -82,7 +82,7 @@ data TempDirPermanence
 data Cabal = Cabal { cabalPath :: FilePath
                    , globalCabalArgs :: Args
                      -- ^ Arguments to pass to all @cabal@ invocations,
-                     -- before any @cabal@ command@.
+                     -- before any @cabal@ command.
                    }
   deriving stock Show
 
@@ -108,9 +108,9 @@ data DestDir pathTy =
     { destDir     :: FilePath
       -- ^ Build @destdir@.
     , prefix      :: FilePath
-      -- ^ The build prefix.
+      -- ^ The build @prefix@.
     , installDir  :: InstallDir pathTy
-      -- ^ The installation directory @<dest-dir>/<prefix>@.
+      -- ^ The installation directory @dest-dir/prefix@.
     }
 
 deriving stock instance Show (InstallDir pathTy) => Show (DestDir pathTy)
@@ -126,7 +126,7 @@ type family InstallDir pathTy where
   InstallDir Canonicalised = FilePath
 
 -- | Canonicalise a 'DestDir', computing the appropriate
--- installation directory @<dest-dir>/<prefix>@.
+-- installation directory @dest-dir/prefix@.
 canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
 canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
   prefix     <- canonicalizePath prefix0
@@ -145,7 +145,7 @@ canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
 
 -- | Verbosity level for the @build-env@ package.
 --
--- The default verbosity level is 1.
+-- The default verbosity level is 'Normal' (1).
 newtype Verbosity = Verbosity Int
   deriving newtype (Eq, Ord)
   deriving stock   Show

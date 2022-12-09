@@ -15,6 +15,9 @@ module BuildEnv.BuildOne
     setupPackage, buildUnit
 
     -- * Package directory structure helpers
+
+    -- $twoDBs
+
   , PkgDir(..), getPkgDir
   , PkgDbDirs(..), getPkgDbDirs
   ) where
@@ -126,18 +129,18 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 --------------------------------------------------------------------------------
 -- Build
 
--- | Return build steps to setup a unit, and build steps
--- to configure, build and and register the unit in the package database.
+-- | Return build steps to to configure, build and and installing the unit,
+-- including registering it in the package database if it is a library.
 --
 -- You can run the build script with 'runBuildScript', or you can
 -- turn it into a shell script with 'script'.
 --
--- Note: executing the build script will fail
--- if the unit has already been installed/registered.
+-- Note: executing the build script will fail if the unit has already been
+-- registered in the package database.
 buildUnit :: Verbosity
-          -> Compiler  -- ^ which @ghc@ and @ghc-pkg@ executables to use
-          -> PkgDbDirs
-          -> PkgDir
+          -> Compiler
+          -> PkgDbDirs -- ^ package database directories (see 'getPkgDbDirs')
+          -> PkgDir    -- ^ package directory (see 'getPkgDir')
           -> DestDir Canonicalised
                -- ^ installation directory structure
           -> Args      -- ^ extra @Setup configure@ arguments for this unit
@@ -339,12 +342,13 @@ lookupDependency unitWeAreBuilding depUnitId plan
 --------------------------------------------------------------------------------
 -- Directory structure computation helpers
 
-{- Note [Using two package databases]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We need *two* distinct package databases: we might want to perform the build
+{- $twoDBs
+__Note [Using two package databases]__
+
+We need __two__ distinct package databases: we might want to perform the build
 in a temporary location, before everything gets placed into its final
 destination. The final package database might use a specific, baked-in
-installation prefix (in the sense of @Setup configure --prefix <pfx>@). As a
+installation prefix (in the sense of @Setup configure --prefix pfx@). As a
 result, this package database won't be immediately usable, as we won't have
 copied over the build products yet.
 
@@ -373,6 +377,11 @@ data PkgDbDirs
         -- package database.
     }
 
+-- | Compute the paths of the package database directories we are going
+-- to use, and create some semaphores to control access to them
+-- in order to avoid contention.
+--
+-- See Note [Using two package databases].
 getPkgDbDirs :: FilePath -- ^ fetched sources directory
              -> FilePath -- ^ installation directory
              -> IO PkgDbDirs
