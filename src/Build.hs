@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
@@ -31,7 +32,7 @@ module Build
 
 -- base
 import Control.Concurrent.QSem
-  ( QSem, newQSem, waitQSem, signalQSem )
+  ( newQSem, waitQSem, signalQSem )
 import Control.Exception
   ( IOException, catch )
 import Control.Monad
@@ -409,25 +410,28 @@ buildPlan verbosity comp fetchDir0 destDir0
         normalMsg verbosity $
           "\nBuilding and registering units asynchronously with " <> j
 
-        AbstractQSem { waitSem, releaseSem } <- qsem n
+        AbstractQSem { withQSem } <- qsem n
         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
-          let doPkgAsync :: ConfiguredUnit -> IO ()
-              doPkgAsync cu@( ConfiguredUnit { puSetupDepends } ) = do
-                setupScript <- unitSetupScript cu
+          let -- Compile the Setup script of the package the unit belongs to.
+              -- (This should happen only once per package.)
+              doPkgSetupAsync :: ConfiguredUnit -> IO ()
+              doPkgSetupAsync cu@( ConfiguredUnit { puSetupDepends } ) = do
+
                 -- Wait for the @setup-depends@ units.
                 for_ puSetupDepends \ setupDepId ->
                   for_ (unitAsyncs Map.!? setupDepId) wait
-                -- Setup the package.
-                waitSem
-                runBuildScript setupScript
-                releaseSem
 
+                -- Setup the package.
+                withQSem do
+                  setupScript <- unitSetupScript cu
+                  runBuildScript setupScript
+
+              -- Configure, build and register the unit.
               doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
               doUnitAsync ( pu, _didSetup ) = do
 
-                let buildScript = unitBuildScript pu
-                    nm  = Configured.puPkgName pu
+                let nm  = Configured.puPkgName pu
                     ver = Configured.puVersion pu
 
                 -- Wait for the package to have been setup.
@@ -438,12 +442,12 @@ buildPlan verbosity comp fetchDir0 destDir0
                   for_ (unitAsyncs Map.!? depUnitId) wait
 
                 -- Build the unit!
-                waitSem
-                runBuildScript buildScript
-                releaseSem
+                withQSem $
+                  runBuildScript $ unitBuildScript pu
 
-          -- Kick off building the units themselves.
-          finalPkgAsyncs  <- for pkgMap  (async . doPkgAsync )
+          -- Kick off setting up the packages...
+          finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
+          -- ... and building the units.
           finalUnitAsyncs <- for unitMap (async . doUnitAsync)
           return (finalPkgAsyncs, finalUnitAsyncs)
         mapM_ wait unitAsyncs
@@ -520,15 +524,18 @@ tagUnits = go Map.empty
       = (cu, mbUnit) : go newPkgs cus
 
 -- | Abstract acquire/release mechanism.
-data AbstractQSem =
-  AbstractQSem { waitSem :: IO (), releaseSem :: IO () }
+newtype AbstractQSem =
+  AbstractQSem { withQSem :: forall r. IO r -> IO r }
 
 -- | Create an acquire/release mechanism for the given number of tokens.
 --
 -- An input of @0@ means unrestricted (no semaphore at all).
 qsem :: Word8 -> IO AbstractQSem
-qsem 0 = return $ AbstractQSem { waitSem = return (), releaseSem = return () }
+qsem 0 = return $ AbstractQSem { withQSem = id }
 qsem n = do
   sem <- newQSem (fromIntegral n)
-  return $
-    AbstractQSem { waitSem = waitQSem sem, releaseSem = signalQSem sem }
+  return $ AbstractQSem \ mr -> do
+    waitQSem sem
+    r <- mr
+    signalQSem sem
+    return r
