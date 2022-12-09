@@ -50,6 +50,8 @@ import Data.Traversable
   ( for )
 import Data.Version
   ( Version )
+import Data.Word
+  ( Word8 )
 
 -- async
 import Control.Concurrent.Async
@@ -94,7 +96,8 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildOne
-  ( setupPackage, buildUnit )
+  ( PkgDbDirs(..), getPkgDbDirs, getPkgDir
+  , setupPackage, buildUnit )
 import CabalPlan
 import qualified CabalPlan as Configured
   ( ConfiguredUnit(..) )
@@ -107,6 +110,7 @@ import Utils
   ( CallProcess(..), callProcessInIO, withTempDir )
 
 --------------------------------------------------------------------------------
+-- Planning.
 
 -- | The name of the dummy cabal package on which we will call
 -- @cabal@ to obtain a build plan.
@@ -278,6 +282,9 @@ data CabalFilesContents
       -- ^ The @cabal.project@ file contents.
     }
 
+--------------------------------------------------------------------------------
+-- Fetching.
+
 -- | Fetch the sources of a 'CabalPlan', calling @cabal unpack@ on each
 -- package and putting it into the correspondingly named and versioned
 -- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
@@ -324,35 +331,8 @@ cabalFetch verbosity cabal root pkgNmVer = do
          , extraPATH    = []
          , extraEnvVars = [] }
 
-
--- | Sort the units in a 'CabalPlan' in dependency order.
-sortPlan :: CabalPlan -> [ConfiguredUnit]
-sortPlan plan =
-    map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
-  where
-    fst3 :: (a,b,c) -> a
-    fst3 (a,_,_) = a
-    (gr, lookupVertex) = Graph.graphFromEdges'
-       [ (pu, puId, allDepends pu)
-       | PU_Configured pu@(ConfiguredUnit { puId }) <- planUnits plan
-       ]
-
-{- Note [Using two package databases]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We need *two* distinct package databases: we might want to perform the build
-in a temporary location, before everything gets placed into its final
-destination. The final package database might use a specific, baked-in
-installation prefix (in the sense of @Setup configure --prefix <pfx>@). As a
-result, this package database won't be immediately usable, as we won't have
-copied over the build products yet.
-
-In order to be able to build packages in a temporary directory, we create a
-temporary package database that is used for the build, making use of it
-with @Setup register --inplace@.
-We also register the packages into the final package database using
-@ghc-pkg --force@: otherwise, @ghc-pkg@ would error because the relevant files
-haven't been copied over yet.
--}
+--------------------------------------------------------------------------------
+-- Building.
 
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
 -- by running their @Setup.hs@ scripts, and then register them
@@ -381,9 +361,9 @@ buildPlan verbosity comp fetchDir0 destDir0
     createDirectoryIfMissing True installDir
 
     let -- Create the package database directories (if they don't already exist).
-        -- See Note [Using two package databases].
-        tempPkgDbDir  = fetchDir   </> "package.conf"
-        finalPkgDbDir = installDir </> "package.conf"
+        -- See Note [Using two package databases] in BuildOne.
+        pkgDbDirs@( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } )
+          = getPkgDbDirs fetchDir installDir
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
     when tempPkgDbExists $
      removeDirectoryRecursive tempPkgDbDir
@@ -400,21 +380,7 @@ buildPlan verbosity comp fetchDir0 destDir0
       Text.unlines
         [ "  - " <> pkgNameVersion nm ver
         | (nm, ver) <- Map.keys pkgMap ]
-
-    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
-        unitSetupScript pu@(ConfiguredUnit { puPkgSrc, puSetupDepends }) = do
-          let nm  = Configured.puPkgName pu
-              ver = Configured.puVersion pu
-          setupPackage verbosity comp fetchDir nm ver puPkgSrc puSetupDepends
-        unitBuildScript :: ConfiguredUnit -> BuildScript
-        unitBuildScript pu@(ConfiguredUnit { puPkgName, puComponentName }) =
-          let pkgConfigureArgs =
-                lookupTargetArgs configureArgs puPkgName puComponentName
-          in buildUnit verbosity comp fetchDir dest
-                  pkgConfigureArgs ghcPkgArgs
-                  depMap pu
-
-    debugMsg verbosity $ "Units to build:\n" <>
+    debugMsg verbosity $ "Units:\n" <>
       Text.unlines
         [ "  - " <> pkgNm <> ":" <> cabalComponent compName
         | ( ConfiguredUnit
@@ -423,13 +389,27 @@ buildPlan verbosity comp fetchDir0 destDir0
           , _ ) <- unitsToBuild
         ]
 
+    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
+        unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
+          let pkgDir = getPkgDir fetchDir pu
+          setupPackage verbosity comp pkgDbDirs pkgDir puSetupDepends
+        unitBuildScript :: ConfiguredUnit -> BuildScript
+        unitBuildScript pu@(ConfiguredUnit { puPkgName, puComponentName }) =
+          let pkgDir = getPkgDir fetchDir pu
+              pkgConfigureArgs =
+                lookupTargetArgs configureArgs puPkgName puComponentName
+          in buildUnit verbosity comp pkgDbDirs pkgDir dest
+                  pkgConfigureArgs ghcPkgArgs
+                  depMap pu
+
     case buildStrat of
       Async n -> do
-        WithQSem { waitSem, releaseSem } <-
-          if n <= 0
-          then return $ WithQSem (return ()) (return ())
-          else qsem <$> newQSem n
-        normalMsg verbosity "Building and registering units asynchronously"
+        let j :: Text
+            j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
+        normalMsg verbosity $
+          "\nBuilding and registering units asynchronously with " <> j
+
+        AbstractQSem { waitSem, releaseSem } <- qsem n
         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
           let doPkgAsync :: ConfiguredUnit -> IO ()
@@ -469,7 +449,7 @@ buildPlan verbosity comp fetchDir0 destDir0
         mapM_ wait unitAsyncs
 
       TopoSort -> do
-        normalMsg verbosity "Building and registering units sequentially.\n\
+        normalMsg verbosity "\nBuilding and registering units sequentially.\n\
                             \NB: pass -j<N> for increased parallelism."
         for_ unitsToBuild \ ( cu, didSetup ) -> do
           when (isNothing didSetup) $
@@ -477,7 +457,7 @@ buildPlan verbosity comp fetchDir0 destDir0
           runBuildScript (unitBuildScript cu)
 
       Script fp -> do
-        normalMsg verbosity $ "Writing build scripts to " <> Text.pack fp
+        normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
         allScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
           mbSetup <- if   isNothing didSetup
                      then unitSetupScript cu
@@ -509,9 +489,24 @@ buildPlan verbosity comp fetchDir0 destDir0
               [ (planUnitUnitId pu, pu)
               | pu <- planUnits cabalPlan ]
 
---------
--- Util
 
+-- | Sort the units in a 'CabalPlan' in dependency order.
+sortPlan :: CabalPlan -> [ConfiguredUnit]
+sortPlan plan =
+    map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
+  where
+    fst3 :: (a,b,c) -> a
+    fst3 (a,_,_) = a
+    (gr, lookupVertex) = Graph.graphFromEdges'
+       [ (pu, puId, allDepends pu)
+       | PU_Configured pu@(ConfiguredUnit { puId }) <- planUnits plan
+       ]
+
+-- | Tag units in a build plan: the first unit we compile in each package
+-- is tagged (with @'Nothing'@) as having the responsibility to build
+-- the Setup executable for the package it belongs to, while other units
+-- in this same package are tagged with @'Just' uid@, where @uid@ is the unit
+-- which is responsible for building the Setup executable.
 tagUnits :: [ConfiguredUnit] -> [(ConfiguredUnit, Maybe UnitId)]
 tagUnits = go Map.empty
   where
@@ -524,8 +519,16 @@ tagUnits = go Map.empty
       , ( mbUnit, newPkgs ) <- Map.insertLookupWithKey (\_ a _ -> a) (nm,ver) puId seenPkgs
       = (cu, mbUnit) : go newPkgs cus
 
-data WithQSem =
-  WithQSem { waitSem :: IO (), releaseSem :: IO () }
+-- | Abstract acquire/release mechanism.
+data AbstractQSem =
+  AbstractQSem { waitSem :: IO (), releaseSem :: IO () }
 
-qsem :: QSem -> WithQSem
-qsem sem = WithQSem { waitSem = waitQSem sem, releaseSem = signalQSem sem }
+-- | Create an acquire/release mechanism for the given number of tokens.
+--
+-- An input of @0@ means unrestricted (no semaphore at all).
+qsem :: Word8 -> IO AbstractQSem
+qsem 0 = return $ AbstractQSem { waitSem = return (), releaseSem = return () }
+qsem n = do
+  sem <- newQSem (fromIntegral n)
+  return $
+    AbstractQSem { waitSem = waitQSem sem, releaseSem = signalQSem sem }

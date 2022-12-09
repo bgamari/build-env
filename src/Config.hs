@@ -14,6 +14,8 @@ import Control.Monad
   ( when )
 import Data.Kind
   ( Type )
+import Data.Word
+  ( Word8 )
 
 -- directory
 import System.Directory
@@ -81,9 +83,7 @@ data BuildStrategy
   = TopoSort
   -- | Asynchronously build all the packages, with each package
   -- waiting on its dependencies.
-  | Async Int
-    -- ^ Either 0 (unlimited) or >= 2.
-    -- (Use 'TopoSort' instead of @'Async' 1@.)
+  | Async Word8
   -- | Output a build script that can be run later.
   | Script FilePath
   deriving stock Show

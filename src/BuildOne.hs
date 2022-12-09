@@ -7,13 +7,18 @@
 -- 'buildUnit' prepares the package and returns build instructions
 -- to configure, build and install the unit using the @Setup.hs@ script,
 -- registering it into a local package database using @ghc-pkg@.
-module BuildOne ( setupPackage, buildUnit ) where
+module BuildOne
+  ( -- * Building packages
+    setupPackage, buildUnit
+
+    -- * Package directory structure helpers
+  , PkgDir(..), getPkgDir
+  , PkgDbDirs(..), getPkgDbDirs
+  ) where
 
 -- base
 import Data.Foldable
   ( for_ )
-import Data.Version
-  ( Version )
 
 -- containers
 import Data.Map.Strict
@@ -47,31 +52,22 @@ import qualified CabalPlan as Configured
 import Script
 
 --------------------------------------------------------------------------------
+-- Setup
 
 -- | Setup a single package.
 --
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
              -> Compiler
-             -> FilePath -- ^ fetched sources directory
-                         -- (not specific to this package)
-             -> PkgName  -- ^ package name
-             -> Version  -- ^ package version
-             -> PkgSrc
+             -> PkgDbDirs
+             -> PkgDir
              -> [UnitId] -- ^ @UnitId@s of @setup-depends@
              -> IO BuildScript
 setupPackage verbosity ( Compiler { ghcPath } )
-             srcsDir nm ver pkgSource
+             ( PkgDbDirs { tempPkgDbDir } )
+             ( PkgDir { pkgNameVer, pkgDir } )
              setupDepIds
-  = do { let packageNameVer = Text.unpack $ pkgNameVersion nm ver
-             pkgDir
-               | Local src <- pkgSource
-               = src
-               | otherwise
-               = srcsDir </> packageNameVer
-             tempPkgDbDir = srcsDir </> "package.conf"
-
-       -- Find the appropriate Setup.hs file (creating one if necessary)
+  = do { -- Find the appropriate Setup.hs file (creating one if necessary)
        ; setupHs <- findSetupHs pkgDir
        ; return $ execWriter do
           { let setupArgs = [ setupHs, "-o"
@@ -80,7 +76,7 @@ setupPackage verbosity ( Compiler { ghcPath } )
                             , ghcVerbosity verbosity
                             ] ++ map unitIdArg setupDepIds
           ; logMessage verbosity Verbose $
-              "Compiling Setup.hs for " <> packageNameVer
+              "Compiling Setup.hs for " <> pkgNameVer
           ; callProcess $
               CP { cwd          = "."
                  , prog         = ghcPath
@@ -89,6 +85,36 @@ setupPackage verbosity ( Compiler { ghcPath } )
                , extraEnvVars = [] }
           }
         }
+
+-- | Find the @Setup.hs@/@Setup.lhs@ file to use,
+-- or create one using @main = defaultMain@ if none exist.
+findSetupHs :: FilePath -> IO FilePath
+findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
+  where
+    useDefaultSetupHs = do
+        let path = root </> "Setup.hs"
+        writeFile path defaultSetupHs
+        return path
+
+    try fname = do
+        let path = root </> fname
+        exists <- doesFileExist path
+        return $ if exists then Just path else Nothing
+
+    defaultSetupHs = unlines
+        [ "import Distribution.Simple"
+        , "main = defaultMain"
+        ]
+
+    trySetupsOrUseDefault [] = useDefaultSetupHs
+    trySetupsOrUseDefault (setupPath:setups) = do
+      res <- try setupPath
+      case res of
+        Nothing    -> trySetupsOrUseDefault setups
+        Just setup -> return setup
+
+--------------------------------------------------------------------------------
+-- Build
 
 -- | Return build steps to setup a unit, and build steps
 -- to configure, build and and register the unit in the package database.
@@ -100,8 +126,8 @@ setupPackage verbosity ( Compiler { ghcPath } )
 -- if the unit has already been installed/registered.
 buildUnit :: Verbosity
           -> Compiler  -- ^ which @ghc@ and @ghc-pkg@ executables to use
-          -> FilePath  -- ^ overall source directory
-                       -- (the directory for this unit will be a subdirectory)
+          -> PkgDbDirs
+          -> PkgDir
           -> DestDir Canonicalised
                -- ^ installation directory structure
           -> Args      -- ^ extra @Setup configure@ arguments for this unit
@@ -111,27 +137,18 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
              ( Compiler { ghcPath, ghcPkgPath } )
-             srcsDir ( DestDir { installDir, prefix, destDir } )
+             ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } )
+             ( PkgDir { pkgNameVer, pkgDir } )
+             ( DestDir { installDir, prefix, destDir } )
              userConfigureArgs userGhcPkgArgs
              plan unit
   = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
         thisUnitId = Text.unpack (unUnitId $ Configured.puId unit)
-        printableName
+        unitPrintableName
           | verbosity >= Verbose
-          = packageNameVer <> ":" <> compName
+          = pkgNameVer <> ":" <> compName
           | otherwise
           = compName
-        packageNameVer = Text.unpack $
-         pkgNameVersion
-           (Configured.puPkgName unit)
-           (Configured.puVersion unit)
-        pkgDir
-          | Local src <- puPkgSrc unit
-          = src
-          | otherwise
-          = srcsDir </> packageNameVer
-        tempPkgDbDir  = srcsDir    </> "package.conf"
-        finalPkgDbDir = installDir </> "package.conf"
     in execWriter do
   {
     -- Configure
@@ -147,7 +164,7 @@ buildUnit verbosity
                         , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
                         , "--package-db=" ++ tempPkgDbDir
                         , "--exact-configuration"
-                        , "--datasubdir=" ++ packageNameVer
+                        , "--datasubdir=" ++ pkgNameVer
                         , "--builddir=" ++ buildDir
                         , setupVerbosity verbosity
                         ] ++ flagsArg
@@ -157,7 +174,7 @@ buildUnit verbosity
                         ++ [ buildTarget unit ]
         setupExe = pkgDir </> "Setup" <.> exe
   ; logMessage verbosity Verbose $
-      "Configuring " <> printableName
+      "Configuring " <> unitPrintableName
   ; logMessage verbosity Debug $
       "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
   ; callProcess $
@@ -182,7 +199,7 @@ buildUnit verbosity
 
   -- Build
   ; logMessage verbosity Verbose $
-      "Building " <> printableName
+      "Building " <> unitPrintableName
   ; callProcess $
       CP { cwd          = pkgDir
          , prog         = setupExe
@@ -194,7 +211,7 @@ buildUnit verbosity
 
    -- Copy
    ; logMessage verbosity Verbose $
-       "Copying " <> printableName
+       "Copying " <> unitPrintableName
    ; callProcess $
        CP { cwd          = pkgDir
           , prog         = setupExe
@@ -216,7 +233,7 @@ buildUnit verbosity
     ; for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) ->
 
      do { logMessage verbosity Verbose $
-           mconcat [ "Registering ", printableName, " in "
+           mconcat [ "Registering ", unitPrintableName, " in "
                    , desc, " package database at:\n  "
                    , pkgDbDir ]
 
@@ -249,7 +266,7 @@ buildUnit verbosity
     ; _notALib -> return ()
     }
 
-    ; logMessage verbosity Normal $ "Installed " <> printableName
+    ; logMessage verbosity Normal $ "Installed " <> unitPrintableName
     }
 
 ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
@@ -286,8 +303,8 @@ dependencyArg fullPlan unitWeAreBuilding depUnitId
     mkDependency ( PU_Preexisting ( PreexistingUnit { puPkgName = PkgName nm } ) )
       = nm <> "=" <> unUnitId depUnitId
     mkDependency ( PU_Configured ( ConfiguredUnit { puPkgName = PkgName pkg
-                                                  , puComponentName = ComponentName _ comp } ) )
-      = pkg <> ":" <> comp <> "=" <> unUnitId depUnitId
+                                                  , puComponentName = comp } ) )
+      = pkg <> ":" <> componentName comp <> "=" <> unUnitId depUnitId
 
 -- | Look up a dependency in the full build plan.
 --
@@ -302,32 +319,69 @@ lookupDependency unitWeAreBuilding depUnitId plan
   = pu
   | otherwise
   = error $ "buildUnit: can't find dependency in build plan\n\
-            \unit:" ++ show (Configured.puPkgName unitWeAreBuilding) ++ "\n\
-            \dependency:" ++ show depUnitId
+            \unit: " ++ show (Configured.puPkgName unitWeAreBuilding) ++ "\n\
+            \dependency: " ++ show depUnitId
 
--- | Find the @Setup.hs@/@Setup.lhs@ file to use,
--- or create one using @main = defaultMain@ if none exist.
-findSetupHs :: FilePath -> IO FilePath
-findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
-  where
-    useDefaultSetupHs = do
-        let path = root </> "Setup.hs"
-        writeFile path defaultSetupHs
-        return path
+--------------------------------------------------------------------------------
+-- Directory structure computation helpers
 
-    try fname = do
-        let path = root </> fname
-        exists <- doesFileExist path
-        return $ if exists then Just path else Nothing
+{- Note [Using two package databases]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We need *two* distinct package databases: we might want to perform the build
+in a temporary location, before everything gets placed into its final
+destination. The final package database might use a specific, baked-in
+installation prefix (in the sense of @Setup configure --prefix <pfx>@). As a
+result, this package database won't be immediately usable, as we won't have
+copied over the build products yet.
 
-    defaultSetupHs = unlines
-        [ "import Distribution.Simple"
-        , "main = defaultMain"
-        ]
+In order to be able to build packages in a temporary directory, we create a
+temporary package database that is used for the build, making use of it
+with @Setup register --inplace@.
+We also register the packages into the final package database using
+@ghc-pkg --force@: otherwise, @ghc-pkg@ would error because the relevant files
+haven't been copied over yet.
+-}
 
-    trySetupsOrUseDefault [] = useDefaultSetupHs
-    trySetupsOrUseDefault (setupPath:setups) = do
-      res <- try setupPath
-      case res of
-        Nothing    -> trySetupsOrUseDefault setups
-        Just setup -> return setup
+-- | The package database directories.
+--
+-- See Note [Using two package databases].
+data PkgDbDirs
+  = PkgDbDirs
+    { tempPkgDbDir  :: FilePath
+        -- ^ Local package database directory
+    , finalPkgDbDir :: FilePath
+        -- ^ Installation package database directory
+    }
+
+getPkgDbDirs :: FilePath -- ^ fetched sources directory
+             -> FilePath -- ^ installation directory
+             -> PkgDbDirs
+getPkgDbDirs fetchDir installDir =
+  PkgDbDirs { tempPkgDbDir, finalPkgDbDir }
+    where
+      tempPkgDbDir  = fetchDir   </> "package.conf"
+      finalPkgDbDir = installDir </> "package.conf"
+
+-- | The package @name-version@ string and its directory.
+data PkgDir
+  = PkgDir
+    { pkgNameVer    :: String
+        -- ^ Package @name-version@ string
+    , pkgDir        :: FilePath
+        -- ^ Package directory
+    }
+
+-- | Compute some directory paths relevant to installation and registration
+-- of a package.
+getPkgDir :: FilePath       -- ^ fetched sources directory
+          -> ConfiguredUnit -- ^ any unit from the package in question
+          -> PkgDir
+getPkgDir fetchDir ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } ) =
+  PkgDir { pkgNameVer, pkgDir }
+    where
+      pkgNameVer = Text.unpack $ pkgNameVersion puPkgName puVersion
+      pkgDir
+        | Local dir <- puPkgSrc
+        = dir
+        | otherwise
+        = fetchDir </> pkgNameVer

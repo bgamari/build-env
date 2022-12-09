@@ -10,6 +10,8 @@ import Data.Char
   ( isSpace )
 import Data.Bool
   ( bool )
+import Data.Word
+  ( Word8 )
 
 -- containers
 import qualified Data.Map.Strict as Map
@@ -323,24 +325,14 @@ build = do
   where
 
     optStrategy :: Parser BuildStrategy
-    optStrategy = async <|> script <|> pure TopoSort
+    optStrategy = (Async <$> async) <|> script <|> pure TopoSort
 
-    async :: Parser BuildStrategy
-    async = option (readMAsync <|> return (Async 0))
+    async :: Parser Word8
+    async = option (auto <|> return 0)
         (  short 'j'
         <> long "async"
         <> help "Use asynchronous package building"
         <> metavar "NUM_THREADS" )
-
-    readMAsync :: ReadM BuildStrategy
-    readMAsync = do
-      n <- auto
-      if | n >= 2
-         -> return $ Async n
-         | n == 1
-         -> return TopoSort
-         | otherwise
-         -> readerError "Number of threads must be >= 1"
 
     script :: Parser BuildStrategy
     script = option (Script <$> str)
