@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
 -- Module      :  BuildOne
@@ -8,13 +7,9 @@
 -- 'buildUnit' prepares the package and returns build instructions
 -- to configure, build and install the unit using the @Setup.hs@ script,
 -- registering it into a local package database using @ghc-pkg@.
-module BuildOne ( preparePackage, buildUnit ) where
+module BuildOne ( setupPackage, buildUnit ) where
 
 -- base
-import Control.Monad
-  ( when )
-import Control.Exception
-  ( IOException, catch )
 import Data.Foldable
   ( for_ )
 import Data.Version
@@ -53,57 +48,50 @@ import Script
 
 --------------------------------------------------------------------------------
 
-{- Note [Using two package databases]
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-We need *two* distinct package databases: we might want to perform the build
-in a temporary location, before everything gets placed into its final
-destination. The final package database might use a specific, baked-in
-installation prefix (in the sense of @Setup configure --prefix <pfx>@). As a
-result, this package database won't be immediately usable, as we won't have
-copied over the build products yet.
-
-In order to be able to build packages in a temporary directory, we create a
-temporary package database that is used for the build, making use of it
-with @Setup register --inplace@.
-We also register the packages into the final package database using
-@ghc-pkg --force@: otherwise, @ghc-pkg@ would error because the relevant files
-haven't been copied over yet.
--}
-
--- | Prepare a single package for building.
+-- | Setup a single package.
 --
--- Returns the path to its @Setup@ script.
-preparePackage :: FilePath -- ^ overall source directory
-               -> DestDir Canonicalised
-                    -- ^ installation directory structure
-               -> PkgName -- ^ package name
-               -> Version -- ^ package version
-               -> PkgSrc
-               -> IO FilePath
-preparePackage srcsDir ( DestDir { installDir } ) nm ver pkgSource
+-- Returns a build script which compiles the @Setup@ script.
+setupPackage :: Verbosity
+             -> Compiler
+             -> FilePath -- ^ fetched sources directory
+                         -- (not specific to this package)
+             -> PkgName  -- ^ package name
+             -> Version  -- ^ package version
+             -> PkgSrc
+             -> [UnitId] -- ^ @UnitId@s of @setup-depends@
+             -> IO BuildScript
+setupPackage verbosity ( Compiler { ghcPath } )
+             srcsDir nm ver pkgSource
+             setupDepIds
   = do { let packageNameVer = Text.unpack $ pkgNameVersion nm ver
-             srcDir
+             pkgDir
                | Local src <- pkgSource
                = src
                | otherwise
                = srcsDir </> packageNameVer
-             tempPkgDbDir  = srcsDir    </> "package.conf"
-             finalPkgDbDir = installDir </> "package.conf"
-
-         -- Create the package database directories (if they don't already exist).
-         -- See Note [Using two package databases].
-       ; tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
-       ; when tempPkgDbExists $
-          removeDirectoryRecursive tempPkgDbDir
-            `catch` \ ( _ :: IOException ) -> return ()
-       ; mapM_ (createDirectoryIfMissing True) [ tempPkgDbDir, finalPkgDbDir ]
+             tempPkgDbDir = srcsDir </> "package.conf"
 
        -- Find the appropriate Setup.hs file (creating one if necessary)
-       ; setupHs <- findSetupHs srcDir
-       ; return setupHs }
+       ; setupHs <- findSetupHs pkgDir
+       ; return $ execWriter do
+          { let setupArgs = [ setupHs, "-o"
+                            , pkgDir </> "Setup"
+                            , "-package-db=" ++ tempPkgDbDir
+                            , ghcVerbosity verbosity
+                            ] ++ map unitIdArg setupDepIds
+          ; logMessage verbosity Verbose $
+              "Compiling Setup.hs for " <> packageNameVer
+          ; callProcess $
+              CP { cwd          = "."
+                 , prog         = ghcPath
+                 , args         = setupArgs
+                 , extraPATH    = []
+               , extraEnvVars = [] }
+          }
+        }
 
--- | Prepare a single unit for building, and return build steps
--- to build it and register it in the package database.
+-- | Return build steps to setup a unit, and build steps
+-- to configure, build and and register the unit in the package database.
 --
 -- You can run the build script with 'runBuildScript', or you can
 -- turn it into a shell script with 'script'.
@@ -120,13 +108,12 @@ buildUnit :: Verbosity
           -> Args      -- ^ extra @ghc-pkg register@ arguments
           -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
           -> ConfiguredUnit -- ^ the unit to build
-          -> FilePath       -- ^ the path of this unit's @Setup@ script
           -> BuildScript
 buildUnit verbosity
              ( Compiler { ghcPath, ghcPkgPath } )
              srcsDir ( DestDir { installDir, prefix, destDir } )
              userConfigureArgs userGhcPkgArgs
-             plan unit setupHs
+             plan unit
   = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
         thisUnitId = Text.unpack (unUnitId $ Configured.puId unit)
         printableName
@@ -138,122 +125,104 @@ buildUnit verbosity
          pkgNameVersion
            (Configured.puPkgName unit)
            (Configured.puVersion unit)
-        srcDir
+        pkgDir
           | Local src <- puPkgSrc unit
           = src
           | otherwise
           = srcsDir </> packageNameVer
         tempPkgDbDir  = srcsDir    </> "package.conf"
         finalPkgDbDir = installDir </> "package.conf"
+    in execWriter do
+  {
+    -- Configure
+  ; let flagsArg = case puFlags unit of
+          flags
+            | flagSpecIsEmpty flags
+            -> []
+            | otherwise
+            -> [ "--flags=" ++ Text.unpack (showFlagSpec flags) ]
+        buildDir = pkgDir </> "dist" </> thisUnitId
+        configureArgs = [ "--with-compiler", ghcPath
+                        , "--prefix", prefix
+                        , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
+                        , "--package-db=" ++ tempPkgDbDir
+                        , "--exact-configuration"
+                        , "--datasubdir=" ++ packageNameVer
+                        , "--builddir=" ++ buildDir
+                        , setupVerbosity verbosity
+                        ] ++ flagsArg
+                          ++ userConfigureArgs
+                          ++ map ( dependencyArg plan unit )
+                              ( Configured.puDepends unit )
+                        ++ [ buildTarget unit ]
+        setupExe = pkgDir </> "Setup" <.> exe
+  ; logMessage verbosity Verbose $
+      "Configuring " <> printableName
+  ; logMessage verbosity Debug $
+      "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
+  ; callProcess $
+      CP { cwd          = pkgDir
+         , prog         = setupExe
+         , args         = "configure" : configureArgs
 
-    in execWriter
+           -- Add the output binary directory to PATH, to satisfy executable
+           -- dependencies during the build.
+         , extraPATH    = [ installDir </> "bin" ]
 
-    do { logMessage verbosity Normal $ "Building " <> printableName
+            -- Specify the data directories for all dependencies.
+         , extraEnvVars =
+             [ ( mangledPkgName depName <> "_datadir"
+               , installDir </> Text.unpack (pkgNameVersion depName depVer) )
+             | depUnitId <- Configured.puDepends unit
+             , let dep     = lookupDependency unit depUnitId plan
+                   depName = planUnitPkgName dep
+                   depVer  = planUnitVersion dep
+            ]
+         }
 
-         -- Setup
-       ; let setupArgs = [ setupHs, "-o"
-                         , srcDir </> "Setup"
-                         , "-package-db=" ++ tempPkgDbDir
-                         , ghcVerbosity verbosity
-                         ] ++ map unitIdArg (puSetupDepends unit)
-       ; logMessage verbosity Verbose $
-           "Compiling Setup.hs for " <> printableName
-       ; callProcess $
-           CP { cwd          = "."
-              , prog         = ghcPath
-              , args         = setupArgs
-              , extraPATH    = []
-              , extraEnvVars = [] }
+  -- Build
+  ; logMessage verbosity Verbose $
+      "Building " <> printableName
+  ; callProcess $
+      CP { cwd          = pkgDir
+         , prog         = setupExe
+         , args         = [ "build"
+                          , "--builddir=" ++ buildDir
+                          , setupVerbosity verbosity]
+         , extraPATH    = []
+         , extraEnvVars = [] }
 
-         -- Configure
-       ; let flagsArg = case puFlags unit of
-               flags
-                 | flagSpecIsEmpty flags
-                 -> []
-                 | otherwise
-                 -> [ "--flags=" ++ Text.unpack (showFlagSpec flags) ]
-             buildDir = srcDir </> "dist" </> thisUnitId
-             configureArgs = [ "--with-compiler", ghcPath
-                             , "--prefix", prefix
-                             , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
-                             , "--package-db=" ++ tempPkgDbDir
-                             , "--exact-configuration"
-                             , "--datasubdir=" ++ packageNameVer
-                             , "--builddir=" ++ buildDir
-                             , setupVerbosity verbosity
-                             ] ++ flagsArg
-                               ++ userConfigureArgs
-                               ++ map ( dependencyArg plan unit )
-                                   ( Configured.puDepends unit )
-                             ++ [ buildTarget unit ]
-             setupExe = srcDir </> "Setup" <.> exe
-       ; logMessage verbosity Verbose $
-           "Configuring " <> printableName
-       ; logMessage verbosity Debug $
-           "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
-       ; callProcess $
-           CP { cwd          = srcDir
-              , prog         = setupExe
-              , args         = "configure" : configureArgs
+   -- Copy
+   ; logMessage verbosity Verbose $
+       "Copying " <> printableName
+   ; callProcess $
+       CP { cwd          = pkgDir
+          , prog         = setupExe
+          , args         = [ "copy", setupVerbosity verbosity
+                           , "--builddir=" ++ buildDir
+                           , "--destdir", destDir ]
+          , extraPATH    = []
+          , extraEnvVars = [] }
 
-                -- Add the output binary directory to PATH, to satisfy executable
-                -- dependencies during the build.
-              , extraPATH    = [ installDir </> "bin" ]
+      -- Register
+   ;  case cuComponentType unit of
+   { Lib -> do {
+    -- Register library (in both the local and final package databases)
+    -- See Note [Using two package databases] in Build.
+    ; let pkgRegsFile = pkgDir </> ( thisUnitId <> "-pkg-reg.conf" )
+          dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
+                 , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
 
-                 -- Specify the data directories for all dependencies.
-              , extraEnvVars =
-                  [ ( mangledPkgName depName <> "_datadir"
-                    , installDir </> Text.unpack (pkgNameVersion depName depVer) )
-                  | depUnitId <- Configured.puDepends unit
-                  , let dep     = lookupDependency unit depUnitId plan
-                        depName = planUnitPkgName dep
-                        depVer  = planUnitVersion dep
-                 ]
-              }
+    ; for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) ->
 
-          -- Build
-        ; logMessage verbosity Verbose $
-            "Building " <> printableName
-        ; callProcess $
-            CP { cwd          = srcDir
-               , prog         = setupExe
-               , args         = [ "build"
-                                , "--builddir=" ++ buildDir
-                                , setupVerbosity verbosity]
-               , extraPATH    = []
-               , extraEnvVars = [] }
-
-          -- Copy
-        ; logMessage verbosity Verbose $
-            "Copying " <> printableName
-        ; callProcess $
-            CP { cwd          = srcDir
-               , prog         = setupExe
-               , args         = [ "copy", setupVerbosity verbosity
-                                , "--builddir=" ++ buildDir
-                                , "--destdir", destDir ]
-               , extraPATH    = []
-               , extraEnvVars = [] }
-
-           -- Register
-        ;  case cuComponentType unit of
-        { Lib ->
-    do  { -- Register library (in both the local and final package databases)
-          -- See Note [Using two package databases].
-        ; let pkgRegsFile = srcDir </> ( thisUnitId <> "-pkg-reg.conf" )
-              dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
-                     , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
-
-        ; for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) -> do
-
-        ; logMessage verbosity Verbose $
+     do { logMessage verbosity Verbose $
            mconcat [ "Registering ", printableName, " in "
                    , desc, " package database at:\n  "
                    , pkgDbDir ]
 
           -- Setup register
         ; callProcess $
-            CP { cwd          = srcDir
+            CP { cwd          = pkgDir
                , prog         = setupExe
                , args         = [ "register", setupVerbosity verbosity
                                 , "--builddir=" ++ buildDir
@@ -275,13 +244,13 @@ buildUnit verbosity
                , extraEnvVars = [] }
             -- NB: we have configured & built a single target,
             -- so there should be a single "pkg-reg.conf" file.
-        }
+        } }
 
-        ; _notALib -> return ()
-        }
+    ; _notALib -> return ()
+    }
 
-      ; logMessage verbosity Normal $ "Installed " <> printableName
-      }
+    ; logMessage verbosity Normal $ "Installed " <> printableName
+    }
 
 ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
 ghcVerbosity (Verbosity i)

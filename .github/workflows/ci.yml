@@ -36,7 +36,7 @@ jobs:
       run: |
         cabal run exe:build-env -- plan lens -p plan.json -v2
         cabal run exe:build-env -- fetch -p plan.json -f sources -v2
-        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -v2
+        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -j8 -v2
         ghc-pkg --package-db=install/package.conf field lens id
 
     - name: "Test 2: build aeson (seed file & cabal.config)"
@@ -67,4 +67,4 @@ jobs:
     - name: "Test 6: package with multiple libraries"
       working-directory: ./tests/test6
       run: |
-        cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local "pkg1 pkg1" --local "pkg2 pkg2"
+        cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local "pkg1 pkg1" --local "pkg2 pkg2" -j8

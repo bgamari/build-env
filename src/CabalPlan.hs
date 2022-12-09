@@ -182,6 +182,11 @@ allDepends :: ConfiguredUnit -> [UnitId]
 allDepends (ConfiguredUnit { puDepends, puExeDepends, puSetupDepends }) =
   puDepends ++ puExeDepends ++ puSetupDepends
 
+-- | The dependencies of a unit, excluding @setup-depends@.
+unitDepends :: ConfiguredUnit -> [UnitId]
+unitDepends (ConfiguredUnit { puDepends, puExeDepends }) =
+  puDepends ++ puExeDepends
+
 -- | Information about a built-in pre-existing unit (such as @base@).
 data PreexistingUnit
   = PreexistingUnit

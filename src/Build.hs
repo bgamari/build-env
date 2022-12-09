@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
 -- Module      :  Build
@@ -29,6 +30,12 @@ module Build
   ) where
 
 -- base
+import Control.Concurrent.QSem
+  ( QSem, newQSem, waitQSem, signalQSem )
+import Control.Exception
+  ( IOException, catch )
+import Control.Monad
+  ( when )
 import Control.Monad.Fix
   ( MonadFix(mfix) )
 import Data.Char
@@ -36,7 +43,7 @@ import Data.Char
 import Data.Foldable
   ( for_ )
 import Data.Maybe
-  ( mapMaybe, maybeToList )
+  ( mapMaybe, maybeToList, isNothing )
 import Data.String
   ( IsString )
 import Data.Traversable
@@ -46,7 +53,7 @@ import Data.Version
 
 -- async
 import Control.Concurrent.Async
-  ( async, forConcurrently, wait )
+  ( async, wait )
 
 -- bytestring
 import qualified Data.ByteString.Lazy as Lazy.ByteString
@@ -58,11 +65,9 @@ import qualified Data.Graph as Graph
 import Data.Map.Strict
   ( Map )
 import qualified Data.Map.Strict as Map
-  ( (!?), assocs, elems, fromList, keys, lookup, mapMaybe )
 import qualified Data.Map.Lazy as Lazy
   ( Map )
 import qualified Data.Map.Lazy as Lazy.Map
-  ( fromList, fromListWith )
 import Data.Set
   ( Set )
 import qualified Data.Set as Set
@@ -71,7 +76,8 @@ import qualified Data.Set as Set
 -- directory
 import System.Directory
   ( canonicalizePath, createDirectoryIfMissing
-  , doesDirectoryExist )
+  , doesDirectoryExist, removeDirectoryRecursive
+  )
 
 -- filepath
 import System.FilePath
@@ -83,14 +89,15 @@ import System.FilePath
 import Data.Text
   ( Text )
 import qualified Data.Text    as Text
-  ( all, intercalate, pack, unlines, unpack, unwords )
 import qualified Data.Text.IO as Text
-  ( writeFile )
+  ( appendFile, writeFile )
 
 -- build-env
 import BuildOne
-  ( buildUnit, preparePackage )
+  ( setupPackage, buildUnit )
 import CabalPlan
+import qualified CabalPlan as Configured
+  ( ConfiguredUnit(..) )
 import Config
 import Script
   ( BuildScript, runBuildScript, script )
@@ -330,6 +337,23 @@ sortPlan plan =
        | PU_Configured pu@(ConfiguredUnit { puId }) <- planUnits plan
        ]
 
+{- Note [Using two package databases]
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+We need *two* distinct package databases: we might want to perform the build
+in a temporary location, before everything gets placed into its final
+destination. The final package database might use a specific, baked-in
+installation prefix (in the sense of @Setup configure --prefix <pfx>@). As a
+result, this package database won't be immediately usable, as we won't have
+copied over the build products yet.
+
+In order to be able to build packages in a temporary directory, we create a
+temporary package database that is used for the build, making use of it
+with @Setup register --inplace@.
+We also register the packages into the final package database using
+@ghc-pkg --force@: otherwise, @ghc-pkg@ would error because the relevant files
+haven't been copied over yet.
+-}
+
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
 -- by running their @Setup.hs@ scripts, and then register them
 -- into a local package database at @installdir/package.conf@.
@@ -356,6 +380,16 @@ buildPlan verbosity comp fetchDir0 destDir0
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
 
+    let -- Create the package database directories (if they don't already exist).
+        -- See Note [Using two package databases].
+        tempPkgDbDir  = fetchDir   </> "package.conf"
+        finalPkgDbDir = installDir </> "package.conf"
+    tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
+    when tempPkgDbExists $
+     removeDirectoryRecursive tempPkgDbDir
+       `catch` \ ( _ :: IOException ) -> return ()
+    mapM_ (createDirectoryIfMissing True) [ tempPkgDbDir, finalPkgDbDir ]
+
     normalMsg verbosity $ "\nPreparing packages for build"
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
@@ -365,78 +399,133 @@ buildPlan verbosity comp fetchDir0 destDir0
     debugMsg verbosity $ "Packages:\n" <>
       Text.unlines
         [ "  - " <> pkgNameVersion nm ver
-        | (nm, ver) <- Map.keys pkgs ]
+        | (nm, ver) <- Map.keys pkgMap ]
 
-    let forPkgs :: Traversable t => t a -> (a -> IO b) -> IO (t b)
-        forPkgs = case buildStrat of { Async -> forConcurrently; _ -> for }
-    setups <-
-      forPkgs pkgs \ ( nm, ver, pkgSrc ) ->
-        preparePackage fetchDir dest nm ver pkgSrc
-
-    let unitBuildScript :: ConfiguredUnit -> BuildScript
-        unitBuildScript pu@(ConfiguredUnit { puPkgName, puVersion, puComponentName }) =
+    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
+        unitSetupScript pu@(ConfiguredUnit { puPkgSrc, puSetupDepends }) = do
+          let nm  = Configured.puPkgName pu
+              ver = Configured.puVersion pu
+          setupPackage verbosity comp fetchDir nm ver puPkgSrc puSetupDepends
+        unitBuildScript :: ConfiguredUnit -> BuildScript
+        unitBuildScript pu@(ConfiguredUnit { puPkgName, puComponentName }) =
           let pkgConfigureArgs =
                 lookupTargetArgs configureArgs puPkgName puComponentName
-              setupHs = case Map.lookup ( puPkgName, puVersion ) setups of
-                Nothing    -> error $ "buildPlan: could not find Setup.hs for "
-                                   <> Text.unpack (pkgNameVersion puPkgName puVersion)
-                Just setup -> setup
           in buildUnit verbosity comp fetchDir dest
-               pkgConfigureArgs ghcPkgArgs
-               depMap pu setupHs
+                  pkgConfigureArgs ghcPkgArgs
+                  depMap pu
 
     debugMsg verbosity $ "Units to build:\n" <>
       Text.unlines
         [ "  - " <> pkgNm <> ":" <> cabalComponent compName
-        | ConfiguredUnit
-          { puPkgName = PkgName pkgNm
-          , puComponentName = compName } <- unitsToBuild
+        | ( ConfiguredUnit
+            { puPkgName = PkgName pkgNm
+            , puComponentName = compName }
+          , _ ) <- unitsToBuild
         ]
 
     case buildStrat of
-      Async -> do
-        normalMsg verbosity "Building and registering packages asynchronously"
-        unitAsyncs <- mfix \ unitAsyncs ->
+      Async n -> do
+        WithQSem { waitSem, releaseSem } <-
+          if n <= 0
+          then return $ WithQSem (return ()) (return ())
+          else qsem <$> newQSem n
+        normalMsg verbosity "Building and registering units asynchronously"
+        (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
+
           let doPkgAsync :: ConfiguredUnit -> IO ()
-              doPkgAsync pu = do
-                  for_ (allDepends pu) \ depUnitId ->
-                    for_ (unitAsyncs Map.!? depUnitId) \ cu ->
-                      -- (Nothing for Preexisting packages)
-                      wait cu
-                  runBuildScript $ unitBuildScript pu
-           in for unitMap (async . doPkgAsync)
+              doPkgAsync cu@( ConfiguredUnit { puSetupDepends } ) = do
+                setupScript <- unitSetupScript cu
+                -- Wait for the @setup-depends@ units.
+                for_ puSetupDepends \ setupDepId ->
+                  for_ (unitAsyncs Map.!? setupDepId) wait
+                -- Setup the package.
+                waitSem
+                runBuildScript setupScript
+                releaseSem
+
+              doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
+              doUnitAsync ( pu, _didSetup ) = do
+
+                let buildScript = unitBuildScript pu
+                    nm  = Configured.puPkgName pu
+                    ver = Configured.puVersion pu
+
+                -- Wait for the package to have been setup.
+                wait $ pkgAsyncs Map.! (nm, ver)
+
+                -- Wait until we have built the units we depend on.
+                for_ (unitDepends pu) \ depUnitId ->
+                  for_ (unitAsyncs Map.!? depUnitId) wait
+
+                -- Build the unit!
+                waitSem
+                runBuildScript buildScript
+                releaseSem
+
+          -- Kick off building the units themselves.
+          finalPkgAsyncs  <- for pkgMap  (async . doPkgAsync )
+          finalUnitAsyncs <- for unitMap (async . doUnitAsync)
+          return (finalPkgAsyncs, finalUnitAsyncs)
         mapM_ wait unitAsyncs
+
       TopoSort -> do
-        normalMsg verbosity "Building and registering packages sequentially.\n\
-                            \NB: pass --async for increased parallelism."
-        for_ unitsToBuild (runBuildScript . unitBuildScript)
+        normalMsg verbosity "Building and registering units sequentially.\n\
+                            \NB: pass -j<N> for increased parallelism."
+        for_ unitsToBuild \ ( cu, didSetup ) -> do
+          when (isNothing didSetup) $
+            unitSetupScript cu >>= runBuildScript
+          runBuildScript (unitBuildScript cu)
+
       Script fp -> do
-        normalMsg verbosity $ "Writing build script to " <> Text.pack fp
-        Text.writeFile fp (script $ concatMap unitBuildScript unitsToBuild)
+        normalMsg verbosity $ "Writing build scripts to " <> Text.pack fp
+        allScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
+          mbSetup <- if   isNothing didSetup
+                     then unitSetupScript cu
+                     else return []
+          let build = unitBuildScript cu
+          return $ mbSetup ++ build
+        Text.appendFile fp $ script $ concat allScripts
 
   where
 
-    pkgs :: Lazy.Map (PkgName, Version) (PkgName, Version, PkgSrc)
-    pkgs = Lazy.Map.fromListWith comb
-      [ ( (puPkgName, puVersion), ( puPkgName, puVersion, puPkgSrc ) )
-      | ConfiguredUnit { puPkgName, puVersion, puPkgSrc } <- unitsToBuild ]
-      where
-         comb :: (PkgName, Version, PkgSrc)
-              -> (PkgName, Version, PkgSrc)
-              -> (PkgName, Version, PkgSrc)
-         comb ( n, v, s1 ) ( _, _, s2 ) = ( n, v, s1 <> s2 )
+    pkgMap :: Map (PkgName, Version) ConfiguredUnit
+    pkgMap = Lazy.Map.fromList
+      [ ((puPkgName, puVersion), cu)
+      | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
+      , isNothing didSetup ]
 
-    unitsToBuild :: [ConfiguredUnit]
+    -- Units to build, in dependency order.
+    unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
     unitsToBuild
-      = filter (\ ( ConfiguredUnit { puId } ) -> puId /= dummyUnitId )
-      $ sortPlan cabalPlan
+      = tagUnits $ sortPlan cabalPlan
 
-    unitMap :: Lazy.Map UnitId ConfiguredUnit
+    unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
     unitMap = Lazy.Map.fromList
               [ (puId, pu)
-              | pu@( ConfiguredUnit { puId } ) <- unitsToBuild ]
+              | pu@( ConfiguredUnit { puId }, _ ) <- unitsToBuild ]
 
     depMap :: Map UnitId PlanUnit
     depMap = Map.fromList
               [ (planUnitUnitId pu, pu)
               | pu <- planUnits cabalPlan ]
+
+--------
+-- Util
+
+tagUnits :: [ConfiguredUnit] -> [(ConfiguredUnit, Maybe UnitId)]
+tagUnits = go Map.empty
+  where
+    go _ [] = []
+    go seenPkgs ( cu@( ConfiguredUnit { puId } ):cus)
+      | puId == dummyUnitId
+      = go seenPkgs cus
+      | let nm  = Configured.puPkgName cu
+            ver = Configured.puVersion cu
+      , ( mbUnit, newPkgs ) <- Map.insertLookupWithKey (\_ a _ -> a) (nm,ver) puId seenPkgs
+      = (cu, mbUnit) : go newPkgs cus
+
+data WithQSem =
+  WithQSem { waitSem :: IO (), releaseSem :: IO () }
+
+qsem :: QSem -> WithQSem
+qsem sem = WithQSem { waitSem = waitQSem sem, releaseSem = signalQSem sem }

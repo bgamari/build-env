@@ -1,6 +1,7 @@
 
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE MultiWayIf #-}
 
 module Parse ( options, runOptionsParser ) where
 
@@ -223,30 +224,29 @@ dependencies modeDesc
     localPkg :: Parser (PkgName, FilePath)
     localPkg =
       option readLocalPkg
-        ( long "local"
+        (  long "local"
         <> help "Local package source location"
         <> metavar "\"PKG ABS_PATH\"" )
 
     readLocalPkg :: ReadM (PkgName, FilePath)
     readLocalPkg = do
       ln <- str
-      return $ case Text.words ln of
+      case Text.words ln of
         pkg:loc:_
           | validPackageName pkg
-          -> (PkgName pkg, Text.unpack loc)
-        _ -> error "Could not parse --local argument\n\
-                   \Valid usage is of the form: --local \"PKG ABSOLUTE_PATH\""
+          -> return (PkgName pkg, Text.unpack loc)
+        _ -> readerError "Could not parse --local argument\n\
+                         \Valid usage is of the form: --local \"PKG ABSOLUTE_PATH\""
 
     readUnitSpec :: ReadM UnitSpecs
     readUnitSpec = do
       ln <- str
-      return $
-        let (pkgTyComp, rest) = Text.break isSpace ln
-            spec = parsePkgSpec rest
-        in case parsePkgComponent pkgTyComp of
-            Nothing -> error $ "Cannot parse package name: " <> Text.unpack ln
-            Just (pkgNm, comp) ->
-              Map.singleton pkgNm (Remote, spec, Set.singleton comp)
+      let (pkgTyComp, rest) = Text.break isSpace ln
+          spec = parsePkgSpec rest
+      case parsePkgComponent pkgTyComp of
+          Nothing -> readerError $ "Cannot parse package name: " <> Text.unpack ln
+          Just (pkgNm, comp) ->
+            return $ Map.singleton pkgNm (Remote, spec, Set.singleton comp)
 
     unitsHelp, seedsHelp :: String
     (unitsHelp, seedsHelp) = (what <> " seed units", what <> " seed file")
@@ -326,9 +326,21 @@ build = do
     optStrategy = async <|> script <|> pure TopoSort
 
     async :: Parser BuildStrategy
-    async = flag' Async
-        (  long "async"
-        <> help "Use asynchronous package building" )
+    async = option (readMAsync <|> return (Async 0))
+        (  short 'j'
+        <> long "async"
+        <> help "Use asynchronous package building"
+        <> metavar "NUM_THREADS" )
+
+    readMAsync :: ReadM BuildStrategy
+    readMAsync = do
+      n <- auto
+      if | n >= 2
+         -> return $ Async n
+         | n == 1
+         -> return TopoSort
+         | otherwise
+         -> readerError "Number of threads must be >= 1"
 
     script :: Parser BuildStrategy
     script = option (Script <$> str)

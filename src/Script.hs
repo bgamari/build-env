@@ -76,7 +76,10 @@ runBuildStep (LogMessage  msg) = putStrLn msg
 -- | Obtain the textual contents of a build script.
 script :: BuildScript -> Text
 script steps =
-  Text.unlines ( "#/bin/bash" : "" : concatMap stepScript steps )
+  Text.unlines ( header ++ concatMap stepScript steps )
+  where
+    header :: [ Text ]
+    header = [ "#/bin/bash" , "" ]
 
 -- | The underlying script of a build step.
 stepScript :: BuildStep -> [ Text ]

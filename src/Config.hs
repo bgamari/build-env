@@ -79,9 +79,11 @@ data BuildStrategy
   -- | Topologically sort the cabal build plan, and build the
   -- packages in sequence.
   = TopoSort
-  -- | Asynchronously build all the packages, which each package
+  -- | Asynchronously build all the packages, with each package
   -- waiting on its dependencies.
-  | Async
+  | Async Int
+    -- ^ Either 0 (unlimited) or >= 2.
+    -- (Use 'TopoSort' instead of @'Async' 1@.)
   -- | Output a build script that can be run later.
   | Script FilePath
   deriving stock Show
