@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
--- Module      :  Build
+-- Module      :  BuildEnv.Build
 -- Description :  Computing, fetching and building plans
 --
 -- 'computePlan' computes a @cabal@ plan by generating @pkg.cabal@ and
@@ -15,9 +15,9 @@
 -- 'buildPlan' builds each unit in the build plan from source,
 -- using 'buildUnit'. This can be done either asynchronously or sequentially
 -- in dependency order, depending on the 'BuildStrategy'.
--- 'buildPlan' can instead output a shell script containing build instructions,
--- if using the 'Script' 'BuildStrategy'.
-module Build
+-- 'buildPlan' can also be used to output a shell script containing
+-- build instructions, with the 'Script' 'BuildStrategy'.
+module BuildEnv.Build
   ( -- * Computing, fetching and building plans
     computePlan
   , fetchPlan
@@ -91,18 +91,18 @@ import qualified Data.Text.IO as Text
   ( appendFile, writeFile )
 
 -- build-env
-import BuildOne
+import BuildEnv.BuildOne
   ( PkgDbDirs(..), getPkgDbDirs, getPkgDir
   , setupPackage, buildUnit )
-import CabalPlan
-import qualified CabalPlan as Configured
+import BuildEnv.CabalPlan
+import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
-import Config
-import Script
+import BuildEnv.Config
+import BuildEnv.Script
   ( BuildScript, runBuildScript, script )
-import Target
+import BuildEnv.Target
   ( TargetArgs, lookupTargetArgs )
-import Utils
+import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO, withTempDir
   , AbstractQSem(..), qsem, noSem )
 
@@ -334,11 +334,11 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- Building.
 
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
--- by running their @Setup.hs@ scripts, and then register them
--- into a local package database at @installdir/package.conf@.
+-- by running their @Setup@ scripts. Libraries will be registered
+-- into a local package database at @<install-dir>/package.conf@.
 --
 -- Note: this function will fail if one of the packages has already been
--- registed in the package database.
+-- registered in the package database.
 buildPlan :: Verbosity
           -> Compiler
           -> FilePath    -- ^ fetched sources directory (input)

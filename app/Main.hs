@@ -22,13 +22,13 @@ import qualified Data.Text as Text
   ( pack )
 
 -- build-env
-import Build
-import CabalPlan
-import Config
-import File
+import BuildEnv.Build
+import BuildEnv.CabalPlan
+import BuildEnv.Config
+import BuildEnv.File
   ( parseCabalDotConfigPkgs, parseSeedFile )
-import Options
-import Parse
+import BuildEnv.Options
+import BuildEnv.Parse
   ( runOptionsParser )
 
 --------------------------------------------------------------------------------

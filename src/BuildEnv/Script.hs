@@ -1,6 +1,6 @@
 
 -- |
--- Module      :  Script
+-- Module      :  BuildEnv.Script
 -- Description :  Tiny build script DSL
 --
 -- This modules provides a tiny build script DSL.
@@ -8,12 +8,17 @@
 -- A 'BuildScript' is a series of simple build steps (process calls).
 --
 -- A 'BuildScript' can be executed in the 'IO' monad, using 'runBuildScript'.
+--
 -- A 'BuildScript' can be turned into a shell script which can be executed
 -- later, using 'script'.
-module Script
-  ( BuildScript, BuildStep(..)
+module BuildEnv.Script
+  ( -- * Build scripts
+    BuildScript
   , runBuildScript, script
-  , callProcess, logMessage
+
+    -- * Individual build steps
+  , BuildStep(..)
+  , callProcess, logMessage, step
   ) where
 
 -- base
@@ -30,9 +35,9 @@ import Control.Monad.Trans.Writer.CPS
   ( Writer, tell )
 
 -- build-env
-import Config
+import BuildEnv.Config
   ( Verbosity )
-import Utils
+import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO )
 
 --------------------------------------------------------------------------------
@@ -46,6 +51,23 @@ data BuildStep
   = CallProcess CallProcess
   -- | Log a message.
   | LogMessage String
+
+-- | Execute a build script in the 'IO' monad.
+runBuildScript :: BuildScript -> IO ()
+runBuildScript = traverse_ runBuildStep
+
+-- | Execute a single build step in the 'IO' monad.
+runBuildStep :: BuildStep -> IO ()
+runBuildStep (CallProcess cp ) = callProcessInIO cp
+runBuildStep (LogMessage  msg) = putStrLn msg
+
+-- | Obtain the textual contents of a build script.
+script :: BuildScript -> Text
+script steps =
+  Text.unlines ( header ++ concatMap stepScript steps )
+  where
+    header :: [ Text ]
+    header = [ "#/bin/bash" , "" ]
 
 -- | Declare a build step.
 step :: BuildStep -> Writer BuildScript ()
@@ -62,24 +84,6 @@ logMessage v msg_v msg
   = step $ LogMessage msg
   | otherwise
   = return ()
-
--- | Execute a build script in the 'IO' monad.
-runBuildScript :: BuildScript -> IO ()
-runBuildScript = traverse_ runBuildStep
-
--- | Execute a single build step in the 'IO' monad.
-runBuildStep :: BuildStep -> IO ()
-runBuildStep (CallProcess cp ) = callProcessInIO cp
-runBuildStep (LogMessage  msg) = putStrLn msg
-
-
--- | Obtain the textual contents of a build script.
-script :: BuildScript -> Text
-script steps =
-  Text.unlines ( header ++ concatMap stepScript steps )
-  where
-    header :: [ Text ]
-    header = [ "#/bin/bash" , "" ]
 
 -- | The underlying script of a build step.
 stepScript :: BuildStep -> [ Text ]

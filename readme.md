@@ -1,16 +1,12 @@
-# build-env
+# build-env <a href="https://hackage.haskell.org/package/build-env" alt="Hackage"><img src="https://img.shields.io/hackage/v/build-env.svg" /></a>
 
-This is a proof-of-concept utility to build a set of Cabal packages (computed
+**`build-env`** is a utility to build a set of Cabal packages (computed
 by `cabal-install`'s solver) into a free-standing package database.
 
 ## Example
 
 ```
 $ build-env build lens -f sources -o install -j8
-$ ls install/package.conf/lens*
-install/package.conf/lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401.conf
-$ ghc-pkg --package-db=install/package.conf field lens id
-id: lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401
 $ ghci -package-db install/package.conf/ -package lens
 GHCi, version 9.0.2: https://www.haskell.org/ghc/  :? for help
 λ> :ty Control.Lens.Lens
@@ -52,7 +48,7 @@ $ build-env build --prefetched -p plan.json -f sources -o install -j8
 In this example:
 
   - the `fetch` command computes a plan which is written to
-    `plan.json` (using the `cabal` JSON plan format), and fetches all
+    `plan.json` (using the Cabal JSON plan format), and fetches all
     the required sources, putting them into the `sources` directory;
   - the `build` command reads in the build plan and performs the build.
 
@@ -94,7 +90,7 @@ specified by the `cabal.config` file.
 
 Each line in the seeds file should be one of the following:
 
-  - A cabal unit, in the format `unit +flag1 -flag2 >= 0.1 && < 0.3`.
+  - A Cabal unit, in the format `unit +flag1 -flag2 >= 0.1 && < 0.3`.
 
     A unit can be of the form `pkgName`, `lib:pkgName`, `exe:pkgName`,
     `pkgName:lib:compName`, ... as per `cabal` component syntax.
@@ -103,7 +99,7 @@ Each line in the seeds file should be one of the following:
 
     Flags and constraints are optional.  
     When both are present, flags must precede constraints.  
-    Constraints must use valid `cabal` constraint syntax.
+    Constraints must use valid Cabal constraint syntax.
 
   - An allow-newer specification such as:
 
@@ -111,7 +107,7 @@ Each line in the seeds file should be one of the following:
     allow-newer: pkg1:pkg2,pkg3:base,*:ghc
     ```
 
-    This uses `cabal` `allow-newer` syntax.
+    This uses Cabal `allow-newer` syntax.
 
   - An empty line or comment (starting with `--`).
 

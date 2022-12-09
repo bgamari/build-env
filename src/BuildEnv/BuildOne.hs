@@ -1,13 +1,16 @@
 {-# LANGUAGE DataKinds #-}
 
 -- |
--- Module      :  BuildOne
+-- Module      :  BuildEnv.BuildOne
 -- Description :  Configure, build and install a single unit
 --
--- 'buildUnit' prepares the package and returns build instructions
--- to configure, build and install the unit using the @Setup.hs@ script,
--- registering it into a local package database using @ghc-pkg@.
-module BuildOne
+-- 'setupPackage' prepares a package for building, returning instructions
+-- that compile its @Setup@ script.
+--
+-- 'buildUnit' computes build instructions to configure, build and install
+-- the unit using its @Setup@ script. If the unit is a library, the instructions
+-- will also register it into a local package database using @ghc-pkg@.
+module BuildEnv.BuildOne
   ( -- * Building packages
     setupPackage, buildUnit
 
@@ -46,15 +49,15 @@ import Control.Monad.Trans.Writer.CPS
    ( execWriter )
 
 -- build-env
-import Config
-import Utils
+import BuildEnv.Config
+import BuildEnv.Utils
   ( CallProcess(..), exe
   , withQSem, noSem
   )
-import CabalPlan
-import qualified CabalPlan as Configured
+import BuildEnv.CabalPlan
+import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
-import Script
+import BuildEnv.Script
 
 --------------------------------------------------------------------------------
 -- Setup
@@ -288,15 +291,6 @@ buildUnit verbosity
 
     ; logMessage verbosity Normal $ "Installed " <> unitPrintableName
     }
-
-ghcVerbosity, ghcPkgVerbosity, setupVerbosity :: Verbosity -> String
-ghcVerbosity (Verbosity i)
-  | i <= 1
-  = "-v0"
-  | otherwise
-  = "-v1"
-ghcPkgVerbosity = ghcVerbosity
-setupVerbosity  = ghcVerbosity
 
 -- | The argument @-package-id PKG_ID@.
 unitIdArg :: UnitId -> String

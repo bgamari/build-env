@@ -1,11 +1,17 @@
 {-# LANGUAGE DataKinds #-}
 
-module Options where
+-- |
+-- Module      :  BuildEnv.Options
+-- Description :  Options for the command-line interface of @build-env@
+--
+-- This module declares datatypes which specify the structure of the options
+-- expected by the command-line interface of @build-env@.
+module BuildEnv.Options where
 
 -- build-env
-import CabalPlan
-import Config
-import Target
+import BuildEnv.CabalPlan
+import BuildEnv.Config
+import BuildEnv.Target
   ( TargetArgs )
 
 --------------------------------------------------------------------------------

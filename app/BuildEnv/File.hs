@@ -1,6 +1,18 @@
 {-# LANGUAGE TypeApplications #-}
 
-module File
+-- |
+-- Module      :  BuildEnv.File
+-- Description :  Parse packages and units from files
+--
+-- This module implements the parsing of the two file formats supported
+-- by @build-env@:
+--
+--  - SEED files, containing a list of seed units from which to compute
+--    a build plan. See 'parseSeedFile'.
+--
+--  - @cabal.config@ files containing version constraints on packages.
+--    See 'parseCabalDotConfigPkgs'.
+module BuildEnv.File
   ( parseCabalDotConfigPkgs, parseSeedFile )
   where
 
@@ -19,7 +31,7 @@ import qualified Data.Text    as Text
 import qualified Data.Text.IO as Text
 
 -- build-env
-import CabalPlan
+import BuildEnv.CabalPlan
 
 --------------------------------------------------------------------------------
 
@@ -77,18 +89,20 @@ parseCabalDotConfigLine txt
   = error $ "Invalid package in cabal.config file : " <> Text.unpack txt
   where
 
+-- NB: update the readme after changing the documentation below.
+
 -- | Parse a seed file. Each line must either be:
 --
---  - A cabal unit, in the format @unit +flag1 -flag2 >= 0.1 && < 0.3@.
+--  - A Cabal unit, in the format @unit +flag1 -flag2 >= 0.1 && < 0.3@.
 --
 --    A unit can be of the form @pkgName@, @lib:pkgName@, @exe:pkgName@,
---    @pkgName:lib:compName@, ... as per cabal component syntax.
+--    @pkgName:lib:compName@, ... as per Cabal component syntax.
 --
 --    The unit name must be followed by a space.
 --
 --    Flags and constraints are optional.
 --    When both are present, flags must precede constraints.
---    Constraints must use valid @cabal@ constraint syntax.
+--    Constraints must use valid Cabal constraint syntax.
 --
 --  - An allow-newer specification, e.g. @allow-newer: pkg1:pkg2,*:base,...@.
 --    This is not allowed to span multiple lines.

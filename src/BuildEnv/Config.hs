@@ -5,9 +5,29 @@
 {-# LANGUAGE UndecidableInstances #-}
 
 -- |
--- Module      :  Config
--- Description :  Configuration options for @build-env@.
-module Config where
+-- Module      :  BuildEnv.Config
+-- Description :  Configuration options for @build-env@
+--
+-- Configuration options for @build-env@
+module BuildEnv.Config
+  ( -- * General type declarations
+
+    Args, BuildStrategy(..), TempDirPermanence(..)
+
+    -- * @ghc@ and @cabal-install@ executables
+  , Compiler(..), Cabal(..)
+
+    -- * Directory structure
+
+  , DestDir(..), PathType(..), InstallDir
+  , canonicalizeDestDir
+
+    -- * Logging verbosity
+  , Verbosity(.., Quiet, Normal, Verbose, Debug)
+  , quietMsg, normalMsg, verboseMsg, debugMsg
+  , ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
+
+  ) where
 
 -- base
 import Control.Monad
@@ -32,8 +52,33 @@ import qualified Data.Text.IO as Text
   ( putStrLn )
 
 --------------------------------------------------------------------------------
+-- General type definitions
 
--- | Path to the @cabal@ executable.
+-- | A type synonym for command-line arguments.
+type Args = [String]
+
+-- | Build strategy for 'buildPlan'.
+data BuildStrategy
+  -- | Topologically sort the cabal build plan, and build the
+  -- packages in sequence.
+  = TopoSort
+  -- | Asynchronously build all the packages, with each package
+  -- waiting on its dependencies.
+  | Async Word8
+  -- | Output a build script that can be run later.
+  | Script FilePath
+  deriving stock Show
+
+-- | How to handle deletion of temporary directories.
+data TempDirPermanence
+  = DeleteTempDirs
+  | Don'tDeleteTempDirs
+  deriving stock Show
+
+--------------------------------------------------------------------------------
+-- GHC & cabal-install
+
+-- | Path to the @cabal-install@ executable.
 data Cabal = Cabal { cabalPath :: FilePath
                    , globalCabalArgs :: Args
                      -- ^ Arguments to pass to all @cabal@ invocations,
@@ -48,52 +93,8 @@ data Compiler =
            }
   deriving stock Show
 
--- | A type synonym for command-line arguments.
-type Args = [String]
-
--- | Verbosity level for the @build-env@ package.
---
--- The default verbosity level is 1.
-newtype Verbosity = Verbosity Int
-  deriving newtype (Eq, Ord)
-  deriving stock   Show
-
-pattern Normal, Verbose, Debug :: Verbosity
-pattern Normal  = Verbosity 1
-pattern Verbose = Verbosity 2
-pattern Debug   = Verbosity 3
-
-normalMsg, verboseMsg, debugMsg :: Verbosity -> Text -> IO ()
-normalMsg  v msg = when (v >= Normal ) $ Text.putStrLn msg
-verboseMsg v msg = when (v >= Verbose) $ Text.putStrLn msg
-debugMsg   v msg = when (v >= Debug  ) $ Text.putStrLn msg
-
-cabalVerbosity :: Verbosity -> String
-cabalVerbosity (Verbosity i)
-  | i <= 1
-  = "-v0"
-cabalVerbosity (Verbosity 2) = "-v1"
-cabalVerbosity (Verbosity 3) = "-v2"
-cabalVerbosity (Verbosity _) = "-v3"
-
--- | Build strategy for 'buildPlan'.
-data BuildStrategy
-  -- | Topologically sort the cabal build plan, and build the
-  -- packages in sequence.
-  = TopoSort
-  -- | Asynchronously build all the packages, with each package
-  -- waiting on its dependencies.
-  | Async Word8
-  -- | Output a build script that can be run later.
-  | Script FilePath
-  deriving stock Show
-
-
--- | How to handle deletion of temporary directories.
-data TempDirPermanence
-  = DeleteTempDirs
-  | Don'tDeleteTempDirs
-  deriving stock Show
+--------------------------------------------------------------------------------
+-- Directory structure
 
 -- | The directory structure relevant to installation: @dest-dir@ and @prefix@.
 --
@@ -138,3 +139,41 @@ canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
     --
     -- We don't want that, as we *do* want to concatenate both paths.
   return $ DestDir { destDir, prefix, installDir }
+
+--------------------------------------------------------------------------------
+-- Verbosity
+
+-- | Verbosity level for the @build-env@ package.
+--
+-- The default verbosity level is 1.
+newtype Verbosity = Verbosity Int
+  deriving newtype (Eq, Ord)
+  deriving stock   Show
+
+pattern Quiet, Normal, Verbose, Debug :: Verbosity
+pattern Quiet   = Verbosity 0
+pattern Normal  = Verbosity 1
+pattern Verbose = Verbosity 2
+pattern Debug   = Verbosity 3
+
+quietMsg, normalMsg, verboseMsg, debugMsg :: Verbosity -> Text -> IO ()
+quietMsg   v msg = when (v >= Quiet  ) $ Text.putStrLn msg
+normalMsg  v msg = when (v >= Normal ) $ Text.putStrLn msg
+verboseMsg v msg = when (v >= Verbose) $ Text.putStrLn msg
+debugMsg   v msg = when (v >= Debug  ) $ Text.putStrLn msg
+
+ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
+  :: Verbosity -> String
+ghcVerbosity (Verbosity i)
+  | i <= 1
+  = "-v0"
+  | otherwise
+  = "-v1"
+ghcPkgVerbosity = ghcVerbosity
+setupVerbosity  = ghcVerbosity
+cabalVerbosity (Verbosity i)
+  | i <= 1
+  = "-v0"
+cabalVerbosity (Verbosity 2) = "-v1"
+cabalVerbosity (Verbosity 3) = "-v2"
+cabalVerbosity (Verbosity _) = "-v3"

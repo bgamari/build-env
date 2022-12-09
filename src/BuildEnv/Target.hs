@@ -1,12 +1,16 @@
 
 -- |
--- Module      :  Target
+-- Module      :  BuildEnv.Target
 -- Description :  Description of build targets
 --
 -- Description of possible targets to configure or build.
 --
--- See 'Target'.
-module Target where
+-- See 'lookupTargetArgs'.
+module BuildEnv.Target
+  ( TargetArgs(..)
+  , Target(..), PkgTarget(..)
+  , lookupTargetArgs )
+  where
 
 -- containers
 import Data.Map.Strict
@@ -15,9 +19,9 @@ import qualified Data.Map.Strict as Map
   ( findWithDefault )
 
 -- build-env
-import Config
+import BuildEnv.Config
   ( Args )
-import CabalPlan
+import BuildEnv.CabalPlan
   ( ComponentName, PkgName )
 
 --------------------------------------------------------------------------------

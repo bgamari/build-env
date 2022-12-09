@@ -2,13 +2,25 @@
 {-# LANGUAGE RankNTypes #-}
 
 -- |
--- Module      :  Utils
--- Description :  Utilities for @build-env@.
-module Utils
-    ( CallProcess(..), callProcessInIO
+-- Module      :  BuildEnv.Utils
+-- Description :  Utilities for @build-env@
+--
+-- Utilities for spawning of processes in particular environments.
+--
+-- See 'callProcessInIO'.
+module BuildEnv.Utils
+    ( -- * Call a process in a given environment
+      CallProcess(..), callProcessInIO
+
+      -- * Create temporary directories
     , TempDirPermanence(..), withTempDir
+
+      -- * Abstract semaphores
     , AbstractQSem(..), qsem, withQSem, noSem
-    , exe
+
+      -- * OS-specific constants
+    , exe, pATHSeparator
+
     ) where
 
 -- base
@@ -42,7 +54,7 @@ import System.IO.Temp
     )
 
 -- build-env
-import Config
+import BuildEnv.Config
   ( Args, TempDirPermanence(..) )
 
 --------------------------------------------------------------------------------
@@ -61,12 +73,16 @@ data CallProcess
   , args         :: Args
      -- ^ arguments
   , sem          :: AbstractQSem
-     -- ^ lock to take
+     -- ^ lock to take when calling the process
+     -- and waiting for it to return, to avoid
+     -- contention in concurrent situations
   }
 
--- | Run a command inside the specified working directory.
+-- | Run a command and wait for it to complete.
 --
--- Crashes if the spawned command returns with nonzero exit code.
+-- Crashes if the process returns with non-zero exit code.
+--
+-- See 'CallProcess' for a description of the options.
 callProcessInIO :: HasCallStack => CallProcess -> IO ()
 callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
     env <-
@@ -101,7 +117,12 @@ augmentSearchPath var paths = Map.alter f var
     f Nothing  = Just pathsVal
     f (Just p) = Just (p <> pATHSeparator <> pathsVal)
 
-withTempDir :: TempDirPermanence -> String -> (FilePath -> IO a) -> IO a
+-- | Perform an action with a fresh temporary directory.
+withTempDir :: TempDirPermanence  -- ^ whether to delete the temporary directory
+                                  -- after the action completes
+            -> String             -- ^ directory name template
+            -> (FilePath -> IO a) -- ^ action to perform
+            -> IO a
 withTempDir del name k =
   case del of
     DeleteTempDirs

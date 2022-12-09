@@ -3,7 +3,12 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiWayIf #-}
 
-module Parse ( options, runOptionsParser ) where
+-- |
+-- Module      :  BuildEnv.Parse
+-- Description :  Command-line option parser for @build-env@
+--
+-- This module implements the command-line options parsing for @build-env@.
+module BuildEnv.Parse ( options, runOptionsParser ) where
 
 -- base
 import Data.Char
@@ -29,10 +34,10 @@ import qualified Data.Text as Text
   ( break, pack, unpack, words )
 
 -- build-env
-import CabalPlan
-import Config
-import Options
-import Target
+import BuildEnv.CabalPlan
+import BuildEnv.Config
+import BuildEnv.Options
+import BuildEnv.Target
 
 --------------------------------------------------------------------------------
 

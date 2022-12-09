@@ -1,8 +1,32 @@
-cabal-version: 2.4
+cabal-version: 3.0
 name:          build-env
-version:       0.1.0.0
-author:        Ben Gamari
+version:       1.0.0.0
+author:        Ben Gamari & Sam Derbyshire
 maintainer:    ben@smart-cactus.org
+license:       BSD-3-Clause
+category:      Distribution
+build-type:    Simple
+homepage:      https://github.com/bgamari/build-env
+bug-reports:   https://github.com/bgamari/build-env/issues
+
+extra-source-files:
+  readme.md
+  changelog.md
+
+synopsis: Compute, fetch and install Cabal build plans into a local environment
+
+description:
+  __build-env__ allows one to compute, fetch and install Cabal build plans
+  into a local environment, registering the libraries into a free-standing
+  package database, without using any global package database.
+
+  In particular, __build-env__ enables bootstrapping of Haskell packages
+  in hermetic build environments without the use of @cabal-install@ or Stack.
+
+  It can be used as a library, or as an executable.
+
+  Please refer to the [readme](https://github.com/bgamari/build-env/readme.md)
+  for more information and usage examples.
 
 common common
 
@@ -47,21 +71,20 @@ common common
 
 library
 
-    import: common
-
-    exposed-modules:
-        Build
-      , BuildOne
-      , CabalPlan
-      , Config
-      , Script
-      , Target
-
-    other-modules:
-        Utils
+    import:
+        common
 
     hs-source-dirs:
         src
+
+    exposed-modules:
+        BuildEnv.Build
+      , BuildEnv.BuildOne
+      , BuildEnv.CabalPlan
+      , BuildEnv.Config
+      , BuildEnv.Script
+      , BuildEnv.Target
+      , BuildEnv.Utils
 
     build-depends:
         async
@@ -77,22 +100,24 @@ library
 
 executable build-env
 
-    import: common
+    import:
+        common
 
-    main-is: Main.hs
+    hs-source-dirs:
+        app
+
+    main-is:
+        Main.hs
+
+    ghc-options:
+        -threaded
 
     build-depends:
         optparse-applicative
           >= 0.15 && < 0.18
       , build-env
 
-    ghc-options:
-        -threaded
-
-    hs-source-dirs:
-        app
-
     other-modules:
-        File
-      , Options
-      , Parse
+        BuildEnv.File
+      , BuildEnv.Options
+      , BuildEnv.Parse
