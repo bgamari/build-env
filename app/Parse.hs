@@ -228,7 +228,7 @@ dependencies modeDesc
       option readLocalPkg
         (  long "local"
         <> help "Local package source location"
-        <> metavar "\"PKG ABS_PATH\"" )
+        <> metavar "\"PKG PATH\"" )
 
     readLocalPkg :: ReadM (PkgName, FilePath)
     readLocalPkg = do

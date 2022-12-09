@@ -6,9 +6,7 @@ by `cabal-install`'s solver) into a free-standing package database.
 ## Example
 
 ```
-$ build-env plan -p plan.json lens
-$ build-env fetch -p plan.json -f sources
-$ build-env build --prefetched -p plan.json -f sources -o install
+$ build-env build lens -f sources -o install -j8
 $ ls install/package.conf/lens*
 install/package.conf/lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401.conf
 $ ghc-pkg --package-db=install/package.conf field lens id
@@ -21,44 +19,93 @@ Control.Lens.Lens
      -> Control.Lens.Reified.ReifiedLens s t a b
 ```
 
-In the above example, the `plan` command generates a `plan.json` file, which
-is then used by the `fetch` and `build` commands. This allows one to fetch
-packages, copy the sources and the `plan.json` file, and build the plan in a
-different location.
+In this example, the `build-env build` invocation:
 
-If you don't need this functionality, you can build the packages using
-the `build` command alone:
+  - computes a build plan for `lens`,
+  - fetches `lens` and its dependencies into the `sources` directory,
+  - configures, builds and registers all the libraries into the `install`
+    directory, with up to `8` units building concurrently.
+
+We can then tell `ghci` to use this package database.
+
+## Deferred builds
+
+In some situations (e.g. in hermetic build environments), we might need to
+compute a build plan and fetch all the dependencies first, before doing
+an offline build.
+
+This can be achieved with `build-env` with the following two separate
+invocations.
+
+In a local environment (with access to internet):
 
 ```
-$ build-env build lens -f sources -o install
+$ build-env fetch lens -f sources --output-plan plan.json
 ```
+
+In a build environment in which `build-env` has been provisioned:
+
+```
+$ build-env build --prefetched -p plan.json -f sources -o install -j8
+```
+
+In this example:
+
+  - the `fetch` command computes a plan which is written to
+    `plan.json` (using the `cabal` JSON plan format), and fetches all
+    the required sources, putting them into the `sources` directory;
+  - the `build` command reads in the build plan and performs the build.
+
+## Bootstrapping
+
+In the above example, we ran `build-env build` to perform a build. However,
+this requires that the build environment provision `build-env`.
+
+To avoid this requirement, it is also possible to ask `build-env` to output
+a shell script containing the build steps to execute.
+
+In a local environment (with access to internet):
+
+```
+$ build-env build lens -f sources -o install --script build_lens.sh
+```
+
+In a build environment:
+
+```
+$ ./build_lens.sh
+```
+
+The downside is that we lose any parallelism from this approach, as the
+generated build script is inherently sequential.
 
 ## Specifying packages
 
-Instead of passing the required packages by the command line, `build-env` can
-also read them from files:
+Instead of passing the required packages through the command line,
+it can be more convenient to ask `build-env` to read them from files:
 
 ```
 $ build-env build --seeds SEEDS --freeze cabal.config -f sources -o install
 ```
 
-This will compute a build plan for the packages specified in the `SEEDS` file,
+This will build a plan for the packages specified in the `SEEDS` file,
 with versions of packages that aren't in the `SEEDS` file constrained as
 specified by the `cabal.config` file.
 
 Each line in the seeds file should be one of the following:
 
-  - a package with flags and constraints such as:
+  - A cabal unit, in the format `unit +flag1 -flag2 >= 0.1 && < 0.3`.
 
-    ```
-    pkg +flag1 -flag2 >= 0.1 && < 0.3 || == 0.5
-    ```
+    A unit can be of the form `pkgName`, `lib:pkgName`, `exe:pkgName`,
+    `pkgName:lib:compName`, ... as per `cabal` component syntax.
 
-    Flags and constraints are both optional.  
-    If they are both present, flags must come before constraints.  
-    The constraints must use valid `cabal` constraint syntax.
+    The unit name must be followed by a space.
 
-  - an allow-newer specification such as:
+    Flags and constraints are optional.  
+    When both are present, flags must precede constraints.  
+    Constraints must use valid `cabal` constraint syntax.
+
+  - An allow-newer specification such as:
 
     ```
     allow-newer: pkg1:pkg2,pkg3:base,*:ghc
@@ -66,7 +113,7 @@ Each line in the seeds file should be one of the following:
 
     This uses `cabal` `allow-newer` syntax.
 
-  - an empty line or comment (starting with `--`).
+  - An empty line or comment (starting with `--`).
 
 The `cabal.config` file should use valid `cabal.project` syntax, e.g.:
 
@@ -74,3 +121,6 @@ The `cabal.config` file should use valid `cabal.project` syntax, e.g.:
 constraints: pkg1 == 0.1,
              pkg2 >= 3.0
 ```
+
+Only the constraints are processed; everything else from the `cabal.config`
+file is ignored.
