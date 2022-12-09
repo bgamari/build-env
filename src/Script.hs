@@ -83,7 +83,9 @@ script steps =
 
 -- | The underlying script of a build step.
 stepScript :: BuildStep -> [ Text ]
-stepScript (CallProcess (CP { cwd, extraPATH, extraEnvVars, prog, args })) =
+stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
+    -- NB: we ignore the semaphore, as the build scripts we produce
+    -- are inherently sequential.
     [ "( cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars

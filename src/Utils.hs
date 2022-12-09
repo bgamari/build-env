@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+{-# LANGUAGE RankNTypes #-}
 
 -- |
 -- Module      :  Utils
@@ -6,12 +7,17 @@
 module Utils
     ( CallProcess(..), callProcessInIO
     , TempDirPermanence(..), withTempDir
+    , AbstractQSem(..), qsem, withQSem, noSem
     , exe
     ) where
 
 -- base
+import Control.Concurrent.QSem
+  ( QSem, newQSem, signalQSem, waitQSem )
 import Data.List
   ( intercalate )
+import Data.Word
+  ( Word8 )
 import System.Environment
   ( getEnvironment )
 import System.Exit
@@ -54,13 +60,15 @@ data CallProcess
      -- ^ executable
   , args         :: Args
      -- ^ arguments
+  , sem          :: AbstractQSem
+     -- ^ lock to take
   }
 
 -- | Run a command inside the specified working directory.
 --
 -- Crashes if the spawned command returns with nonzero exit code.
 callProcessInIO :: HasCallStack => CallProcess -> IO ()
-callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
+callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
     env <-
       if null extraPATH && null extraEnvVars
       then return Nothing
@@ -72,8 +80,9 @@ callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) = do
           ( Proc.proc prog args )
             { Proc.cwd = Just cwd
             , Proc.env = env }
-    (_, _, _, ph) <- Proc.createProcess processArgs
-    res <- Proc.waitForProcess ph
+    res <- withAbstractQSem sem do
+      (_, _, _, ph) <- Proc.createProcess processArgs
+      Proc.waitForProcess ph
     case res of
       ExitSuccess -> return ()
       ExitFailure i -> do
@@ -118,3 +127,32 @@ pATHSeparator =
 #else
   ":"
 #endif
+
+--------------------------------------------------------------------------------
+-- Semaphores.
+
+-- | Abstract acquire/release mechanism.
+newtype AbstractQSem =
+  AbstractQSem { withAbstractQSem :: forall r. IO r -> IO r }
+
+-- | Create an acquire/release mechanism for the given number of tokens.
+--
+-- An input of @0@ means unrestricted (no semaphore at all).
+qsem :: Word8 -> IO AbstractQSem
+qsem 0 = return noSem
+qsem n = do
+  sem <- newQSem (fromIntegral n)
+  return $ withQSem sem
+
+-- | Abstract acquire/release mechanism controlled by the given 'QSem'.
+withQSem :: QSem -> AbstractQSem
+withQSem sem =
+  AbstractQSem \ mr -> do
+    waitQSem sem
+    r <- mr
+    signalQSem sem
+    return r
+
+-- | No acquire/release mechanism required.
+noSem :: AbstractQSem
+noSem = AbstractQSem { withAbstractQSem = id }

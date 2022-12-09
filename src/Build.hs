@@ -1,5 +1,4 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
@@ -31,8 +30,6 @@ module Build
   ) where
 
 -- base
-import Control.Concurrent.QSem
-  ( newQSem, waitQSem, signalQSem )
 import Control.Exception
   ( IOException, catch )
 import Control.Monad
@@ -51,8 +48,6 @@ import Data.Traversable
   ( for )
 import Data.Version
   ( Version )
-import Data.Word
-  ( Word8 )
 
 -- async
 import Control.Concurrent.Async
@@ -108,7 +103,8 @@ import Script
 import Target
   ( TargetArgs, lookupTargetArgs )
 import Utils
-  ( CallProcess(..), callProcessInIO, withTempDir )
+  ( CallProcess(..), callProcessInIO, withTempDir
+  , AbstractQSem(..), qsem, noSem )
 
 --------------------------------------------------------------------------------
 -- Planning.
@@ -156,7 +152,8 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
          , prog         = cabalPath cabal
          , args         = cabalBuildArgs
          , extraPATH    = []
-         , extraEnvVars = [] }
+         , extraEnvVars = []
+         , sem          = noSem }
 
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
@@ -330,7 +327,8 @@ cabalFetch verbosity cabal root pkgNmVer = do
          , prog         = cabalPath cabal
          , args
          , extraPATH    = []
-         , extraEnvVars = [] }
+         , extraEnvVars = []
+         , sem          = noSem }
 
 --------------------------------------------------------------------------------
 -- Building.
@@ -361,10 +359,10 @@ buildPlan verbosity comp fetchDir0 destDir0
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
 
-    let -- Create the package database directories (if they don't already exist).
-        -- See Note [Using two package databases] in BuildOne.
-        pkgDbDirs@( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } )
-          = getPkgDbDirs fetchDir installDir
+    -- Create the package database directories (if they don't already exist).
+    -- See Note [Using two package databases] in BuildOne.
+    pkgDbDirs@( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } ) <-
+      getPkgDbDirs fetchDir installDir
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
     when tempPkgDbExists $
      removeDirectoryRecursive tempPkgDbDir
@@ -408,9 +406,9 @@ buildPlan verbosity comp fetchDir0 destDir0
         let j :: Text
             j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
         normalMsg verbosity $
-          "\nBuilding and registering units asynchronously with " <> j
+          "\nBuilding and installing units asynchronously with " <> j
 
-        AbstractQSem { withQSem } <- qsem n
+        AbstractQSem { withAbstractQSem } <- qsem n
         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
           let -- Compile the Setup script of the package the unit belongs to.
@@ -423,11 +421,11 @@ buildPlan verbosity comp fetchDir0 destDir0
                   for_ (unitAsyncs Map.!? setupDepId) wait
 
                 -- Setup the package.
-                withQSem do
+                withAbstractQSem do
                   setupScript <- unitSetupScript cu
                   runBuildScript setupScript
 
-              -- Configure, build and register the unit.
+              -- Configure, build and install the unit.
               doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
               doUnitAsync ( pu, _didSetup ) = do
 
@@ -442,7 +440,7 @@ buildPlan verbosity comp fetchDir0 destDir0
                   for_ (unitAsyncs Map.!? depUnitId) wait
 
                 -- Build the unit!
-                withQSem $
+                withAbstractQSem $
                   runBuildScript $ unitBuildScript pu
 
           -- Kick off setting up the packages...
@@ -453,7 +451,7 @@ buildPlan verbosity comp fetchDir0 destDir0
         mapM_ wait unitAsyncs
 
       TopoSort -> do
-        normalMsg verbosity "\nBuilding and registering units sequentially.\n\
+        normalMsg verbosity "\nBuilding and installing units sequentially.\n\
                             \NB: pass -j<N> for increased parallelism."
         for_ unitsToBuild \ ( cu, didSetup ) -> do
           when (isNothing didSetup) $
@@ -522,20 +520,3 @@ tagUnits = go Map.empty
             ver = Configured.puVersion cu
       , ( mbUnit, newPkgs ) <- Map.insertLookupWithKey (\_ a _ -> a) (nm,ver) puId seenPkgs
       = (cu, mbUnit) : go newPkgs cus
-
--- | Abstract acquire/release mechanism.
-newtype AbstractQSem =
-  AbstractQSem { withQSem :: forall r. IO r -> IO r }
-
--- | Create an acquire/release mechanism for the given number of tokens.
---
--- An input of @0@ means unrestricted (no semaphore at all).
-qsem :: Word8 -> IO AbstractQSem
-qsem 0 = return $ AbstractQSem { withQSem = id }
-qsem n = do
-  sem <- newQSem (fromIntegral n)
-  return $ AbstractQSem \ mr -> do
-    waitQSem sem
-    r <- mr
-    signalQSem sem
-    return r

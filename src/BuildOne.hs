@@ -17,6 +17,8 @@ module BuildOne
   ) where
 
 -- base
+import Control.Concurrent
+  ( QSem, newQSem )
 import Data.Foldable
   ( for_ )
 
@@ -45,7 +47,10 @@ import Control.Monad.Trans.Writer.CPS
 
 -- build-env
 import Config
-import Utils ( CallProcess(..), exe )
+import Utils
+  ( CallProcess(..), exe
+  , withQSem, noSem
+  )
 import CabalPlan
 import qualified CabalPlan as Configured
   ( ConfiguredUnit(..) )
@@ -82,7 +87,9 @@ setupPackage verbosity ( Compiler { ghcPath } )
                  , prog         = ghcPath
                  , args         = setupArgs
                  , extraPATH    = []
-               , extraEnvVars = [] }
+                 , extraEnvVars = []
+                 , sem          = noSem
+                 }
           }
         }
 
@@ -137,7 +144,8 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
              ( Compiler { ghcPath, ghcPkgPath } )
-             ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } )
+             ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir
+                         , tempPkgDbSem, finalPkgDbSem } )
              ( PkgDir { pkgNameVer, pkgDir } )
              ( DestDir { installDir, prefix, destDir } )
              userConfigureArgs userGhcPkgArgs
@@ -178,13 +186,13 @@ buildUnit verbosity
   ; logMessage verbosity Debug $
       "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
   ; callProcess $
-      CP { cwd          = pkgDir
-         , prog         = setupExe
-         , args         = "configure" : configureArgs
+      CP { cwd  = pkgDir
+         , prog = setupExe
+         , args = "configure" : configureArgs
 
            -- Add the output binary directory to PATH, to satisfy executable
            -- dependencies during the build.
-         , extraPATH    = [ installDir </> "bin" ]
+         , extraPATH = [ installDir </> "bin" ]
 
             -- Specify the data directories for all dependencies.
          , extraEnvVars =
@@ -195,6 +203,7 @@ buildUnit verbosity
                    depName = planUnitPkgName dep
                    depVer  = planUnitVersion dep
             ]
+         , sem = noSem
          }
 
   -- Build
@@ -207,7 +216,9 @@ buildUnit verbosity
                           , "--builddir=" ++ buildDir
                           , setupVerbosity verbosity]
          , extraPATH    = []
-         , extraEnvVars = [] }
+         , extraEnvVars = []
+         , sem          = noSem
+         }
 
    -- Copy
    ; logMessage verbosity Verbose $
@@ -219,18 +230,20 @@ buildUnit verbosity
                            , "--builddir=" ++ buildDir
                            , "--destdir", destDir ]
           , extraPATH    = []
-          , extraEnvVars = [] }
+          , extraEnvVars = []
+          , sem          = noSem
+          }
 
-      -- Register
-   ;  case cuComponentType unit of
+   -- Register
+   ; case cuComponentType unit of
    { Lib -> do {
     -- Register library (in both the local and final package databases)
     -- See Note [Using two package databases] in Build.
     ; let pkgRegsFile = pkgDir </> ( thisUnitId <> "-pkg-reg.conf" )
-          dirs = [ ( tempPkgDbDir, "temporary", ["--inplace"], [])
-                 , (finalPkgDbDir, "final"    , [], "--force" : userGhcPkgArgs) ]
+          dirs = [ ( tempPkgDbDir,  tempPkgDbSem, "temporary", ["--inplace"], [])
+                 , (finalPkgDbDir, finalPkgDbSem, "final"    , [], "--force" : userGhcPkgArgs) ]
 
-    ; for_ dirs \ (pkgDbDir, desc, extraSetupArgs, extraPkgArgs) ->
+    ; for_ dirs \ (pkgDbDir, pkgDbSem, desc, extraSetupArgs, extraPkgArgs) ->
 
      do { logMessage verbosity Verbose $
            mconcat [ "Registering ", unitPrintableName, " in "
@@ -246,7 +259,12 @@ buildUnit verbosity
                                 , "--gen-pkg-config=" ++ pkgRegsFile
                                 ] ++ extraSetupArgs
                , extraPATH    = []
-               , extraEnvVars = [] }
+               , extraEnvVars = []
+               , sem          = noSem }
+
+          -- NB: we have configured & built a single target,
+          -- so there should be a single "pkg-reg.conf" file,
+          -- and not a directory of registration files.
 
           -- ghc-pkg register
         ; callProcess $
@@ -258,9 +276,11 @@ buildUnit verbosity
                                 , pkgRegsFile ]
                                 ++ extraPkgArgs
                , extraPATH    = []
-               , extraEnvVars = [] }
-            -- NB: we have configured & built a single target,
-            -- so there should be a single "pkg-reg.conf" file.
+               , extraEnvVars = []
+               , sem          = withQSem pkgDbSem }
+               -- Take a lock to avoid contention on the package database
+               -- when building units concurrently.
+
         } }
 
     ; _notALib -> return ()
@@ -349,15 +369,24 @@ data PkgDbDirs
   = PkgDbDirs
     { tempPkgDbDir  :: FilePath
         -- ^ Local package database directory
+    , tempPkgDbSem  :: QSem
+        -- ^ Semaphore controlling access to the temporary
+        -- package database.
     , finalPkgDbDir :: FilePath
         -- ^ Installation package database directory
+    , finalPkgDbSem :: QSem
+        -- ^ Semaphore controlling access to the installation
+        -- package database.
     }
 
 getPkgDbDirs :: FilePath -- ^ fetched sources directory
              -> FilePath -- ^ installation directory
-             -> PkgDbDirs
-getPkgDbDirs fetchDir installDir =
-  PkgDbDirs { tempPkgDbDir, finalPkgDbDir }
+             -> IO PkgDbDirs
+getPkgDbDirs fetchDir installDir = do
+  tempPkgDbSem  <- newQSem 1
+  finalPkgDbSem <- newQSem 1
+  return $
+    PkgDbDirs { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
     where
       tempPkgDbDir  = fetchDir   </> "package.conf"
       finalPkgDbDir = installDir </> "package.conf"
