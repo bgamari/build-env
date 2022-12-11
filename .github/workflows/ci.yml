@@ -62,9 +62,9 @@ jobs:
     - name: "Test 5: bootstrap build-env"
       working-directory: ./tests/test5
       run: |
-        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local "build-env ../.."
+        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local build-env=../..
 
     - name: "Test 6: package with multiple libraries"
       working-directory: ./tests/test6
       run: |
-        cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local "pkg1 pkg1" --local "pkg2 pkg2" -j8
+        cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local pkg1=pkg1 --local pkg2=pkg2 -j8

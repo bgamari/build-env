@@ -31,7 +31,7 @@ import Options.Applicative
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
-  ( break, pack, unpack, words )
+  ( break, pack, splitOn, unpack )
 
 -- build-env
 import BuildEnv.CabalPlan
@@ -234,18 +234,18 @@ dependencies modeDesc
       option readLocalPkg
         (  long "local"
         <> help "Local package source location"
-        <> metavar "\"PKG PATH\"" )
+        <> metavar "PKG=PATH" )
 
     readLocalPkg :: ReadM (PkgName, FilePath)
     readLocalPkg = do
       ln <- str
-      case Text.words ln of
+      case Text.splitOn "=" ln of
         pkg:loc:_
           | validPackageName pkg
           -> return (PkgName pkg, Text.unpack loc)
         _ -> readerError $
               "Could not parse --local argument\n" ++
-              "Valid usage is of the form: --local \"PKG PATH\""
+              "Valid usage is of the form: --local PKG=PATH"
 
     readUnitSpec :: ReadM UnitSpecs
     readUnitSpec = do
