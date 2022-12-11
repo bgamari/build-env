@@ -322,12 +322,11 @@ build = do
   buildFetch      <- optFetch
   buildStrategy   <- optStrategy
   buildDestDir    <- optDestDir
-  configureArgs   <- optConfigureArgs
-  ghcPkgArgs      <- optGhcPkgArgs
+  userUnitArgs    <- optUnitArgs
 
   return $ Build { buildFetch, buildFetchDescr
                  , buildStrategy, buildDestDir
-                 , configureArgs, ghcPkgArgs }
+                 , userUnitArgs }
 
   where
 
@@ -375,14 +374,39 @@ build = do
           , installDir = () -- computed after path canonicalisation
           }
 
-    -- TODO: this only supports passing @setup configure@ arguments
-    -- for all units at once, rather than per-unit.
+    -- TODO: we only support passing arguments for all units at once,
+    -- rather than per-unit.
+    optUnitArgs :: Parser ( ConfiguredUnit -> UnitArgs )
+    optUnitArgs = do
+      confArgs  <- optConfigureArgs
+      mbDocArgs <- optHaddockArgs
+      regArgs   <- optGhcPkgArgs
+      return $ \ cu ->
+        UnitArgs { configureArgs = confArgs cu
+                 , mbHaddockArgs = fmap ($ cu) mbDocArgs
+                 , registerArgs  = regArgs cu }
+
     optConfigureArgs :: Parser ( ConfiguredUnit -> Args )
     optConfigureArgs = do
       args <- many $ option str (  long "configure-arg"
                                 <> help "Pass argument to 'Setup configure'"
                                 <> metavar "ARG" )
       return $ const args
+
+    optHaddockArgs :: Parser ( Maybe ( ConfiguredUnit -> Args ) )
+    optHaddockArgs = do
+      doHaddock <-
+        bool False True <$>
+          switch (  long "haddock"
+                 <> help "Generate haddock documentation" )
+      args <- many $
+        option str (  long "haddock-arg"
+                   <> help "Pass argument to 'Setup haddock'"
+                   <> metavar "ARG" )
+      return $
+        if null args && not doHaddock
+        then Nothing
+        else Just $ const args
 
     optGhcPkgArgs :: Parser ( ConfiguredUnit -> Args )
     optGhcPkgArgs = do

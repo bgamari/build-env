@@ -10,17 +10,21 @@
 --
 -- Configuration options for @build-env@
 module BuildEnv.Config
-  ( -- * General type declarations
+  ( -- * Build strategy
+    BuildStrategy(..)
 
-    Args, BuildStrategy(..), TempDirPermanence(..)
+   -- * Passing arguments
+  , Args, UnitArgs(..)
 
     -- * @ghc@ and @cabal-install@ executables
   , Compiler(..), Cabal(..)
 
     -- * Directory structure
-
   , DestDir(..), PathType(..), InstallDir
   , canonicalizeDestDir
+
+    -- ** Handling of temporary directories
+  , TempDirPermanence(..)
 
     -- * Logging verbosity
   , Verbosity(.., Quiet, Normal, Verbose, Debug)
@@ -52,10 +56,7 @@ import qualified Data.Text.IO as Text
   ( putStrLn )
 
 --------------------------------------------------------------------------------
--- General type definitions
-
--- | A type synonym for command-line arguments.
-type Args = [String]
+-- Build strategy
 
 -- | Build strategy for 'buildPlan'.
 data BuildStrategy
@@ -69,10 +70,22 @@ data BuildStrategy
   | Script FilePath
   deriving stock Show
 
--- | How to handle deletion of temporary directories.
-data TempDirPermanence
-  = DeleteTempDirs
-  | Don'tDeleteTempDirs
+--------------------------------------------------------------------------------
+-- Arguments
+
+-- | A type synonym for command-line arguments.
+type Args = [String]
+
+-- | Arguments specific to a unit.
+data UnitArgs =
+  UnitArgs { configureArgs :: Args
+               -- ^ Arguments to @Setup configure@.
+           , mbHaddockArgs :: Maybe Args
+               -- ^ Arguments to @Setup haddock@.
+               -- @Nothing@ means: skip @Setup haddock@.
+           , registerArgs  :: Args
+               -- ^ Arguments to @ghc-pkg register@.
+           }
   deriving stock Show
 
 --------------------------------------------------------------------------------
@@ -139,6 +152,12 @@ canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
     --
     -- We don't want that, as we *do* want to concatenate both paths.
   return $ DestDir { destDir, prefix, installDir }
+
+-- | How to handle deletion of temporary directories.
+data TempDirPermanence
+  = DeleteTempDirs
+  | Don'tDeleteTempDirs
+  deriving stock Show
 
 --------------------------------------------------------------------------------
 -- Verbosity

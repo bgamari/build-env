@@ -342,16 +342,13 @@ buildPlan :: Verbosity
           -> FilePath    -- ^ fetched sources directory (input)
           -> DestDir Raw -- ^ installation directory structure (output)
           -> BuildStrategy
-          -> ( ConfiguredUnit -> Args )
-             -- ^ extra @Setup configure@ arguments
-             -- (use this to specify haddock, hsc2hs, etc)
-          -> ( ConfiguredUnit -> Args )
-             -- ^ extra @ghc-pkg@ arguments
+          -> ( ConfiguredUnit -> UnitArgs )
+             -- ^ extra arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
 buildPlan verbosity comp fetchDir0 destDir0
           buildStrat
-          configureArgs ghcPkgArgs
+          userUnitArgs
           cabalPlan
   = do
     fetchDir <- canonicalizePath fetchDir0
@@ -396,8 +393,8 @@ buildPlan verbosity comp fetchDir0 destDir0
         unitBuildScript pu =
           let pkgDir = getPkgDir fetchDir pu
           in buildUnit verbosity comp pkgDbDirs pkgDir dest
-                  (configureArgs pu) (ghcPkgArgs pu)
-                  depMap pu
+                (userUnitArgs pu)
+                depMap pu
 
     case buildStrat of
       Async n -> do

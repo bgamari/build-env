@@ -42,7 +42,7 @@ jobs:
     - name: "Test 2: build aeson (seed file & cabal.config)"
       working-directory: ./tests/test2
       run: |
-        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install -v2
+        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -v2
         ghc-pkg --package-db=install/package.conf field aeson id
 
     - name: "Test 3: build c2hs executable (command line)"

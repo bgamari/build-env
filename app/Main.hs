@@ -51,14 +51,13 @@ main = do
         doFetch verbosity cabal fetchDir True newOrUpd plan
       BuildMode ( Build { buildFetchDescr = FetchDescription { fetchDir, fetchInputPlan }
                         , buildFetch, buildStrategy, buildDestDir
-                        , configureArgs, ghcPkgArgs } ) -> do
+                        , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal fetchInputPlan
         case buildFetch of
           Prefetched     -> return ()
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
         buildPlan verbosity compiler fetchDir buildDestDir buildStrategy
-          configureArgs ghcPkgArgs
-          plan
+          userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

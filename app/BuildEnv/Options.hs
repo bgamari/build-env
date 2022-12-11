@@ -127,8 +127,6 @@ data Build
       -- ^ How to perform the build (see 'BuildStrategy').
     , buildDestDir    :: DestDir Raw
       -- ^ The output directory for the build.
-    , configureArgs   :: ( ConfiguredUnit -> Args )
-      -- ^ Arguments to pass to the @setup configure@ script.
-    , ghcPkgArgs      :: ( ConfiguredUnit -> Args )
-      -- ^ Arguments to pass to @ghc-pkg register@.
+    , userUnitArgs    :: ConfiguredUnit -> UnitArgs
+      -- ^ Extra per-unit arguments.
     }
