@@ -261,7 +261,7 @@ buildUnit verbosity
       case cuComponentType unit of
         Lib -> do
           -- Register library (in both the local and final package databases)
-          -- See Note [Using two package databases] in Build.
+          -- See Note [Using two package databases].
           let pkgRegsFile = pkgDir </> ( thisUnitId <> "-pkg-reg.conf" )
               dirs = [ ( tempPkgDbDir,  tempPkgDbSem, "temporary", ["--inplace"], [])
                      , (finalPkgDbDir, finalPkgDbSem, "final"    , [], "--force" : userGhcPkgArgs) ]
