@@ -100,8 +100,6 @@ import qualified BuildEnv.CabalPlan as Configured
 import BuildEnv.Config
 import BuildEnv.Script
   ( BuildScript, runBuildScript, script )
-import BuildEnv.Target
-  ( TargetArgs, lookupTargetArgs )
 import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO, withTempDir
   , AbstractQSem(..), qsem, noSem )
@@ -344,9 +342,11 @@ buildPlan :: Verbosity
           -> FilePath    -- ^ fetched sources directory (input)
           -> DestDir Raw -- ^ installation directory structure (output)
           -> BuildStrategy
-          -> TargetArgs  -- ^ extra @Setup configure@ arguments
-                         -- (use this to specify haddock, hsc2hs, etc)
-          -> Args        -- ^ extra @ghc-pkg@ arguments
+          -> ( ConfiguredUnit -> Args )
+             -- ^ extra @Setup configure@ arguments
+             -- (use this to specify haddock, hsc2hs, etc)
+          -> ( ConfiguredUnit -> Args )
+             -- ^ extra @ghc-pkg@ arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
 buildPlan verbosity comp fetchDir0 destDir0
@@ -393,12 +393,10 @@ buildPlan verbosity comp fetchDir0 destDir0
           let pkgDir = getPkgDir fetchDir pu
           setupPackage verbosity comp pkgDbDirs pkgDir puSetupDepends
         unitBuildScript :: ConfiguredUnit -> BuildScript
-        unitBuildScript pu@(ConfiguredUnit { puPkgName, puComponentName }) =
+        unitBuildScript pu =
           let pkgDir = getPkgDir fetchDir pu
-              pkgConfigureArgs =
-                lookupTargetArgs configureArgs puPkgName puComponentName
           in buildUnit verbosity comp pkgDbDirs pkgDir dest
-                  pkgConfigureArgs ghcPkgArgs
+                  (configureArgs pu) (ghcPkgArgs pu)
                   depMap pu
 
     case buildStrat of

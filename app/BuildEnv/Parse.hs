@@ -37,7 +37,6 @@ import qualified Data.Text as Text
 import BuildEnv.CabalPlan
 import BuildEnv.Config
 import BuildEnv.Options
-import BuildEnv.Target
 
 --------------------------------------------------------------------------------
 
@@ -377,16 +376,18 @@ build = do
           }
 
     -- TODO: this only supports passing @setup configure@ arguments
-    -- for all packages at once, rather than per-package.
-    optConfigureArgs :: Parser TargetArgs
+    -- for all units at once, rather than per-unit.
+    optConfigureArgs :: Parser ( ConfiguredUnit -> Args )
     optConfigureArgs = do
       args <- many $ option str (  long "configure-arg"
                                 <> help "Pass argument to 'Setup configure'"
                                 <> metavar "ARG" )
-      return $ TargetArgs $ Map.singleton AllPkgs args
+      return $ const args
 
-    optGhcPkgArgs :: Parser Args
-    optGhcPkgArgs =
-      many $ option str (  long "ghc-pkg-arg"
-                        <> help "Pass argument to 'ghc-pkg register'"
-                        <> metavar "ARG" )
+    optGhcPkgArgs :: Parser ( ConfiguredUnit -> Args )
+    optGhcPkgArgs = do
+      args <- many $
+        option str (  long "ghc-pkg-arg"
+                   <> help "Pass argument to 'ghc-pkg register'"
+                   <> metavar "ARG" )
+      return $ const args

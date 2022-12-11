@@ -83,7 +83,6 @@ library
       , BuildEnv.CabalPlan
       , BuildEnv.Config
       , BuildEnv.Script
-      , BuildEnv.Target
       , BuildEnv.Utils
 
     build-depends:

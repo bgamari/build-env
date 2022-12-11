@@ -11,8 +11,6 @@ module BuildEnv.Options where
 -- build-env
 import BuildEnv.CabalPlan
 import BuildEnv.Config
-import BuildEnv.Target
-  ( TargetArgs )
 
 --------------------------------------------------------------------------------
 
@@ -24,7 +22,6 @@ data Opts = Opts { compiler  :: Compiler
                  , delTemp   :: TempDirPermanence
                  , workDir   :: FilePath
                  }
-  deriving stock Show
 
 -- | The mode in which to run the executable:
 --
@@ -45,7 +42,6 @@ data Mode
                        -- or add to an existing one
   -- | Build and register packages from fetched sources.
   | BuildMode Build
-  deriving stock Show
 
 -- | How to specify which packages/units to constraint/build.
 data PackageData pkgs
@@ -131,9 +127,8 @@ data Build
       -- ^ How to perform the build (see 'BuildStrategy').
     , buildDestDir    :: DestDir Raw
       -- ^ The output directory for the build.
-    , configureArgs   :: TargetArgs
+    , configureArgs   :: ( ConfiguredUnit -> Args )
       -- ^ Arguments to pass to the @setup configure@ script.
-    , ghcPkgArgs      :: Args
+    , ghcPkgArgs      :: ( ConfiguredUnit -> Args )
       -- ^ Arguments to pass to @ghc-pkg register@.
     }
-  deriving stock Show
