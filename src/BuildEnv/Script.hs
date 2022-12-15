@@ -16,6 +16,9 @@ module BuildEnv.Script
     BuildScript
   , runBuildScript, script
 
+    -- * Configuring quoting
+  , ScriptConfig(..), quoteArg, q
+
     -- * Individual build steps
   , BuildStep(..)
   , callProcess, logMessage, step
@@ -24,6 +27,8 @@ module BuildEnv.Script
 -- base
 import Data.Foldable
   ( traverse_, foldl' )
+import Data.String
+  ( IsString(..) )
 
 -- text
 import Data.Text
@@ -52,6 +57,14 @@ data BuildStep
   -- | Log a message.
   | LogMessage String
 
+data ScriptConfig
+  = ScriptConfig
+  { quoteArgs :: !Bool
+    -- ^ Whether to add quotes around command-line arguments,
+    -- to avoid an argument with spaces being interpreted
+    -- as multiple arguments.
+  }
+
 -- | Execute a build script in the 'IO' monad.
 runBuildScript :: BuildScript -> IO ()
 runBuildScript = traverse_ runBuildStep
@@ -67,7 +80,7 @@ script steps =
   Text.unlines ( header ++ concatMap stepScript steps )
   where
     header :: [ Text ]
-    header = [ "#/bin/bash" , "" ]
+    header = [ "#!/bin/bash" , "" ]
 
 -- | Declare a build step.
 step :: BuildStep -> Writer BuildScript ()
@@ -91,24 +104,31 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
     [ "( exe=\"$(realpath " <> q prog <> ")\" ; \\"
-    , "cd " <> q cwd <> " ; \\" ]
+    , "  cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
     ++
-    [ "  " <> cmd <> " )"
+    [ "  \"exe\" " <> argsText <> " )"
     , resVar <> "=$?"
     , "if [ \"${" <> resVar <> "}\" -eq 0 ]"
     , "then true"
     , "else"
     , "  echo \"callProcess failed with non-zero exit code. Command:\""
-    , "  echo \"> " <> pprCmd <> " \""
+    , "  echo \"> " <> q prog <> " " <> argsText <> " \""
     , "  exit \"${" <> resVar <> "}\""
     , "fi" ]
   where
-    cmd :: Text
-    cmd = "\"$exe\" " <> Text.unwords (map q args)
-    pprCmd :: Text
-    pprCmd = Text.pack prog <> " " <> Text.unwords (map Text.pack args)
+    argsText :: Text
+    argsText = Text.unwords (map Text.pack args)
+      -- Don't quote the arguments: arguments which needed quoting will have
+      -- been quoted using the 'quoteArg' function.
+      --
+      -- This allows users to pass multiple arguments using variables:
+      --
+      -- > myArgs="arg1 arg2 arg3"
+      -- > Setup configure $myArgs
+      --
+      -- by passing @$myArgs@ as a @Setup configure@ argument.
     resVar :: Text
     resVar = "lastExitCode"
     mbUpdatePath :: [Text]
@@ -128,9 +148,10 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
 stepScript (LogMessage str) =
   [ "echo " <> q str ]
 
-
-q :: String -> Text
-q t = "\"" <> Text.pack (escapeArg t) <> "\""
+-- | Quote a string, to avoid spaces causing the string
+-- to be interpreted as multiple arguments.
+q :: ( IsString r, Monoid r ) => String -> r
+q t = "\"" <> fromString (escapeArg t) <> "\""
   where
     escapeArg :: String -> String
     escapeArg = reverse . foldl' escape []
@@ -143,3 +164,15 @@ q t = "\"" <> Text.pack (escapeArg t) <> "\""
       = c:'\\':cs
       | otherwise
       = c:cs
+
+-- | Quote a command-line argument, if the 'ScriptConfig' requires arguments
+-- to be quoted.
+--
+-- No need to call this on the 'cwd' or 'prog' fields of 'CallProcess',
+-- as these will be quoted by the shell-script backend no matter what.
+quoteArg :: ( IsString r, Monoid r ) => ScriptConfig -> String -> r
+quoteArg ( ScriptConfig { quoteArgs } )
+  | quoteArgs
+  = q
+  | otherwise
+  = fromString

@@ -99,7 +99,9 @@ import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Config
 import BuildEnv.Script
-  ( BuildScript, runBuildScript, script )
+  ( BuildScript, runBuildScript, script
+  , ScriptConfig(..)
+  )
 import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO, withTempDir
   , AbstractQSem(..), qsem, noSem )
@@ -385,14 +387,21 @@ buildPlan verbosity comp fetchDir0 destDir0
           , _ ) <- unitsToBuild
         ]
 
-    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
+    let scriptConfig :: ScriptConfig
+        scriptConfig = case buildStrat of
+          Script   {} -> ScriptConfig { quoteArgs = True  }
+          Async    {} -> ScriptConfig { quoteArgs = False }
+          TopoSort {} -> ScriptConfig { quoteArgs = False }
+        unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
           let pkgDir = getPkgDir fetchDir pu
-          setupPackage verbosity comp pkgDbDirs pkgDir puSetupDepends
+          setupPackage verbosity scriptConfig comp
+            pkgDbDirs pkgDir puSetupDepends
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
           let pkgDir = getPkgDir fetchDir pu
-          in buildUnit verbosity comp pkgDbDirs pkgDir dest
+          in buildUnit verbosity scriptConfig comp
+                pkgDbDirs pkgDir dest
                 (userUnitArgs pu)
                 depMap pu
 
