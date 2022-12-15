@@ -28,6 +28,15 @@ description:
   Please refer to the [readme](https://github.com/bgamari/build-env/readme.md)
   for more information and usage examples.
 
+flag jsem
+
+  description:
+    Enable support for parallelism semaphores
+  default:
+    False
+  manual:
+    True
+
 common common
 
     build-depends:
@@ -43,6 +52,13 @@ common common
          ^>= 1.4
       , text
           >= 1.2 && < 2.1
+
+    if flag(jsem)
+      cpp-options:
+        -DBUILDENV_ENABLE_JSEM
+      build-depends:
+        semaphore-compat
+           ^>= 1.0.0
 
     default-language:
         Haskell2010

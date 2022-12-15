@@ -55,7 +55,7 @@ import qualified BuildEnv.CabalPlan as Configured
 import BuildEnv.Script
 import BuildEnv.Utils
   ( CallProcess(..)
-  , withQSem, noSem
+  , abstractQSem, noSem
   )
 
 --------------------------------------------------------------------------------
@@ -305,7 +305,7 @@ buildUnit verbosity
                                   ++ extraPkgArgs
                  , extraPATH    = []
                  , extraEnvVars = []
-                 , sem          = withQSem pkgDbSem
+                 , sem          = abstractQSem pkgDbSem
                    -- Take a lock to avoid contention on the package database
                    -- when building units concurrently.
                  }

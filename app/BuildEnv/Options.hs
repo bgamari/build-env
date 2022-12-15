@@ -125,6 +125,9 @@ data Build
       -- and the build plan they correspond to.
     , buildStrategy   :: BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
+    , eventLogDir     :: Maybe FilePath
+      -- ^ an optional output directory in which to output GHC eventlogs
+      -- for the build
     , buildDestDir    :: DestDir Raw
       -- ^ The output directory for the build.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
