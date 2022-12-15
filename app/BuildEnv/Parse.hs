@@ -1,5 +1,6 @@
 
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiWayIf #-}
 
@@ -15,8 +16,6 @@ import Data.Char
   ( isSpace )
 import Data.Bool
   ( bool )
-import Data.Word
-  ( Word8 )
 
 -- containers
 import qualified Data.Map.Strict as Map
@@ -26,6 +25,16 @@ import qualified Data.Set as Set
 
 -- optparse-applicative
 import Options.Applicative
+
+#if BUILDENV_ENABLE_JSEM
+-- base
+import Text.Read
+  ( readMaybe )
+
+-- semaphore-compat
+import qualified System.Semaphore as System
+  ( SemaphoreName(..) )
+#endif
 
 -- text
 import Data.Text
@@ -323,22 +332,40 @@ build = do
   buildStrategy   <- optStrategy
   buildDestDir    <- optDestDir
   userUnitArgs    <- optUnitArgs
+  eventLogDir     <- optEventLogDir
 
   return $ Build { buildFetch, buildFetchDescr
                  , buildStrategy, buildDestDir
-                 , userUnitArgs }
+                 , userUnitArgs, eventLogDir }
 
   where
 
     optStrategy :: Parser BuildStrategy
-    optStrategy = (Async <$> async) <|> script <|> pure TopoSort
+    optStrategy = (Async <$> sem)
+               <|> script
+               <|> pure TopoSort
 
-    async :: Parser Word8
-    async = option (auto <|> return 0)
+    sem :: Parser AsyncSem
+    sem =
+      option (fmap NewQSem auto <|> return NoSem)
         (  short 'j'
-        <> long "async"
         <> help "Use asynchronous package building"
-        <> metavar "NUM_THREADS" )
+        <> metavar "N" )
+#if BUILDENV_ENABLE_JSEM
+      <|>
+      option jsem
+        (  long "jsem"
+        <> help "Use a system semaphore to control parallelism"
+        <> metavar "[N|SEM_NAME]" )
+
+    jsem :: ReadM AsyncSem
+    jsem = do
+      x <- str
+      return $
+        case readMaybe x of
+          Just n  -> NewJSem n
+          Nothing -> ExistingJSem (System.SemaphoreName x)
+#endif
 
     script :: Parser BuildStrategy
     script = option (Script <$> str)
@@ -415,3 +442,11 @@ build = do
                    <> help "Pass argument to 'ghc-pkg register'"
                    <> metavar "ARG" )
       return $ const args
+
+    optEventLogDir :: Parser (Maybe FilePath)
+    optEventLogDir = do
+        option (fmap Just str)
+          (  long "eventlogs"
+          <> help "Directory for GHC eventlogs"
+          <> value Nothing
+          <> metavar "OUTDIR" )

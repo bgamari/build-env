@@ -40,6 +40,8 @@ import Data.Char
   ( isSpace )
 import Data.Foldable
   ( for_ )
+import Data.Functor
+  ( (<&>) )
 import Data.Maybe
   ( mapMaybe, maybeToList, isNothing )
 import Data.String
@@ -105,7 +107,7 @@ import BuildEnv.Script
   )
 import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO, withTempDir
-  , AbstractQSem(..), qsem, noSem
+  , AbstractSem(..), noSem, withNewAbstractSem
   )
 
 --------------------------------------------------------------------------------
@@ -343,22 +345,26 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- registered in the package database.
 buildPlan :: Verbosity
           -> Compiler
-          -> FilePath    -- ^ fetched sources directory (input)
-          -> DestDir Raw -- ^ installation directory structure (output)
+          -> FilePath       -- ^ fetched sources directory (input)
+          -> DestDir Raw    -- ^ installation directory structure (output)
+          -> Maybe FilePath -- ^ eventlog directory
           -> BuildStrategy
           -> ( ConfiguredUnit -> UnitArgs )
              -- ^ extra arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
-buildPlan verbosity comp fetchDir0 destDir0
-          buildStrat
-          userUnitArgs
-          cabalPlan
+buildPlan verbosity comp fetchDir0 destDir0 mbEventLogDir0
+          buildStrat userUnitArgs cabalPlan
   = do
     fetchDir <- canonicalizePath fetchDir0
     dest@( DestDir { installDir, prefix, destDir } )
       <- canonicalizeDestDir destDir0
     createDirectoryIfMissing True installDir
+
+    mbEventLogDir <- for mbEventLogDir0 \ eventLogDir0 -> do
+      eventLogDir <- canonicalizePath eventLogDir0
+      createDirectoryIfMissing True eventLogDir
+      return eventLogDir
 
     -- Create the package database directories (if they don't already exist).
     -- See Note [Using two package databases] in BuildOne.
@@ -392,25 +398,32 @@ buildPlan verbosity comp fetchDir0 destDir0
     let unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
           let pkgDir = getPkgDir fetchDir pu
-          setupPackage verbosity comp
-            pkgDbDirs pkgDir puSetupDepends
-        unitBuildScript :: ConfiguredUnit -> BuildScript
-        unitBuildScript pu =
+          setupPackage verbosity comp pkgDbDirs pkgDir puSetupDepends
+        unitBuildScript :: Args -> ConfiguredUnit -> BuildScript
+        unitBuildScript extraConfigureArgs pu@(ConfiguredUnit { puId }) =
           let pkgDir = getPkgDir fetchDir pu
-          in buildUnit verbosity comp
-                pkgDbDirs pkgDir dest
-                (userUnitArgs pu)
-                depMap pu
+              mbEventLogArg = mbEventLogDir <&> \ logDir ->
+                let
+                  logPath = logDir </> "ghc" <.> Text.unpack (unUnitId puId) <.> "eventlog"
+                in "--ghc-option=\"-with-rtsopts= -l -ol" <> logPath <> "\""
+                  -- TODO: this doesn't seem to work yet...
+              allConfigureArgs =
+                mconcat [ extraConfigureArgs
+                        , maybeToList mbEventLogArg
+                        , configureArgs ( userUnitArgs pu ) ]
+              allUnitArgs =
+                ( userUnitArgs pu ) { configureArgs = allConfigureArgs }
+          in buildUnit verbosity comp pkgDbDirs pkgDir dest
+                allUnitArgs depMap pu
 
     case buildStrat of
-      Async n -> do
-        let j :: Text
-            j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
+      Async sem -> do
         normalMsg verbosity $
-          "\nBuilding and installing units asynchronously with " <> j
+          "\nBuilding and installing units asynchronously with " <> semDescription sem
 
-        AbstractQSem { withAbstractQSem } <- qsem n
-        (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
+        withNewAbstractSem sem \ ( AbstractSem { withAbstractSem } ) semArgs -> do
+
+         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
           let -- Compile the Setup script of the package the unit belongs to.
               -- (This should happen only once per package.)
@@ -422,7 +435,7 @@ buildPlan verbosity comp fetchDir0 destDir0
                   for_ (unitAsyncs Map.!? setupDepId) wait
 
                 -- Setup the package.
-                withAbstractQSem do
+                withAbstractSem do
                   setupScript <- unitSetupScript cu
                   executeBuildScript setupScript
 
@@ -441,15 +454,15 @@ buildPlan verbosity comp fetchDir0 destDir0
                   for_ (unitAsyncs Map.!? depUnitId) wait
 
                 -- Build the unit!
-                withAbstractQSem $
-                  executeBuildScript $ unitBuildScript pu
+                withAbstractSem $
+                  executeBuildScript $ unitBuildScript semArgs pu
 
           -- Kick off setting up the packages...
           finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
           -- ... and building the units.
           finalUnitAsyncs <- for unitMap (async . doUnitAsync)
           return (finalPkgAsyncs, finalUnitAsyncs)
-        mapM_ wait unitAsyncs
+         mapM_ wait unitAsyncs
 
       TopoSort -> do
         normalMsg verbosity "\nBuilding and installing units sequentially.\n\
@@ -457,7 +470,7 @@ buildPlan verbosity comp fetchDir0 destDir0
         for_ unitsToBuild \ ( cu, didSetup ) -> do
           when (isNothing didSetup) $
             unitSetupScript cu >>= executeBuildScript
-          executeBuildScript (unitBuildScript cu)
+          executeBuildScript (unitBuildScript [] cu)
 
       Script fp -> do
         let scriptConfig :: ScriptConfig
@@ -469,7 +482,7 @@ buildPlan verbosity comp fetchDir0 destDir0
           mbSetup <- if   isNothing didSetup
                      then unitSetupScript cu
                      else return emptyBuildScript
-          let build = unitBuildScript cu
+          let build = unitBuildScript [] cu
           return $ mbSetup <> build
         Text.appendFile fp $ script scriptConfig $ mconcat buildScripts
 

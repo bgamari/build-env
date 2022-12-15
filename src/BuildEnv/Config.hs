@@ -13,6 +13,8 @@
 module BuildEnv.Config
   ( -- * Build strategy
     BuildStrategy(..)
+  , AsyncSem(..)
+  , semDescription
 
    -- * Passing arguments
   , Args, UnitArgs(..)
@@ -44,7 +46,7 @@ import Control.Monad
 import Data.Kind
   ( Type )
 import Data.Word
-  ( Word8 )
+  ( Word16 )
 
 -- directory
 import System.Directory
@@ -54,26 +56,68 @@ import System.Directory
 import System.FilePath
   ( (</>), (<.>), dropDrive )
 
+#if BUILDENV_ENABLE_JSEM
+-- semaphore-compat
+import qualified System.Semaphore as System
+  ( SemaphoreName(..) )
+#endif
+
 -- text
 import Data.Text
   ( Text )
+import qualified Data.Text as Text
+  ( pack )
 import qualified Data.Text.IO as Text
   ( putStrLn )
 
 --------------------------------------------------------------------------------
 -- Build strategy
 
--- | Build strategy for 'buildPlan'.
+-- | Build strategy for 'BuildEnv.Build.buildPlan'.
 data BuildStrategy
   -- | Topologically sort the cabal build plan, and build the
   -- packages in sequence.
   = TopoSort
+
   -- | Asynchronously build all the packages, with each package
   -- waiting on its dependencies.
-  | Async Word8
+  | Async
+      AsyncSem -- ^ The kind of semaphore to use to control concurrency.
+
   -- | Output a build script that can be run later.
   | Script FilePath
   deriving stock Show
+
+-- | What kind of semaphore to use in 'BuildEnv.Build.buildPlan'?
+--
+-- NB: this datatype depends on whether the @jsem@ flag
+-- was enabled when building the @build-env@ package.
+data AsyncSem
+  -- | Don't use any semaphore (not recommended).
+  = NoSem
+  -- | Create a new 'Control.Concurrent.QSem.QSem' semaphore
+  -- with the given number of tokens.
+  | NewQSem Word16
+#if BUILDENV_ENABLE_JSEM
+  -- | __@jsem@ only:__ create a new system semaphore with the given number
+  -- of tokens, passing it to @ghc@ invocations.
+  | NewJSem Word16
+  -- | __@jsem@ only:__ use an existing system semaphore,
+  -- passing it to @ghc@ invocations.
+  | ExistingJSem System.SemaphoreName
+#endif
+  deriving stock Show
+
+-- | A description of the kind of semaphore we are using to control concurrency.
+semDescription :: AsyncSem -> Text
+semDescription = \case
+  NoSem     -> "no semaphore"
+  NewQSem i -> "-j" <> Text.pack (show i)
+#if BUILDENV_ENABLE_JSEM
+  NewJSem i -> "--jsem " <> Text.pack (show i)
+  ExistingJSem ( System.SemaphoreName jsemName ) ->
+    "--jsem " <> Text.pack jsemName
+#endif
 
 --------------------------------------------------------------------------------
 -- Arguments
