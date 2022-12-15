@@ -90,7 +90,8 @@ stepScript :: BuildStep -> [ Text ]
 stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
-    [ "( cd " <> q cwd <> " ; \\" ]
+    [ "( exe=\"$(realpath " <> q prog <> ")\" ; \\"
+    , "cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
     ++
@@ -105,7 +106,7 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     , "fi" ]
   where
     cmd :: Text
-    cmd = q prog <> " " <> Text.unwords (map q args)
+    cmd = "\"$exe\" " <> Text.unwords (map q args)
     pprCmd :: Text
     pprCmd = Text.pack prog <> " " <> Text.unwords (map Text.pack args)
     resVar :: Text
