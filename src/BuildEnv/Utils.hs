@@ -1,4 +1,3 @@
-{-# LANGUAGE CPP #-}
 {-# LANGUAGE RankNTypes #-}
 
 -- |
@@ -17,9 +16,6 @@ module BuildEnv.Utils
 
       -- * Abstract semaphores
     , AbstractQSem(..), qsem, withQSem, noSem
-
-      -- * OS-specific constants
-    , exe, pATHSeparator
 
     ) where
 
@@ -59,7 +55,9 @@ import System.IO.Temp
 
 -- build-env
 import BuildEnv.Config
-  ( Args, TempDirPermanence(..) )
+  ( Args, TempDirPermanence(..)
+  , pATHSeparator, hostStyle
+  )
 
 --------------------------------------------------------------------------------
 
@@ -121,9 +119,9 @@ augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String
 augmentSearchPath _   []    = id
 augmentSearchPath var paths = Map.alter f var
   where
-    pathsVal = intercalate pATHSeparator paths
+    pathsVal = intercalate (pATHSeparator hostStyle) paths
     f Nothing  = Just pathsVal
-    f (Just p) = Just (p <> pATHSeparator <> pathsVal)
+    f (Just p) = Just (p <> (pATHSeparator hostStyle) <> pathsVal)
 
 -- | Perform an action with a fresh temporary directory.
 withTempDir :: TempDirPermanence  -- ^ whether to delete the temporary directory
@@ -138,24 +136,6 @@ withTempDir del name k =
     Don'tDeleteTempDirs
       -> do root <- getCanonicalTemporaryDirectory
             createTempDirectory root name >>= k
-
--- | OS-dependent executable file extension.
-exe :: String
-exe =
-#if defined(mingw32_HOST_OS)
-  "exe"
-#else
-  ""
-#endif
-
--- | OS-dependent separator for PATH variable.
-pATHSeparator :: String
-pATHSeparator =
-#if defined(mingw32_HOST_OS)
-  ";"
-#else
-  ":"
-#endif
 
 --------------------------------------------------------------------------------
 -- Semaphores.
