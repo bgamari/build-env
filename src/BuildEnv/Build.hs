@@ -99,12 +99,14 @@ import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Config
 import BuildEnv.Script
-  ( BuildScript, runBuildScript, script
-  , ScriptConfig(..)
+  ( BuildScript, ScriptConfig(..)
+  , emptyBuildScript
+  , executeBuildScript, script
   )
 import BuildEnv.Utils
   ( CallProcess(..), callProcessInIO, withTempDir
-  , AbstractQSem(..), qsem, noSem )
+  , AbstractQSem(..), qsem, noSem
+  )
 
 --------------------------------------------------------------------------------
 -- Planning.
@@ -387,20 +389,15 @@ buildPlan verbosity comp fetchDir0 destDir0
           , _ ) <- unitsToBuild
         ]
 
-    let scriptConfig :: ScriptConfig
-        scriptConfig = case buildStrat of
-          Script   {} -> ScriptConfig { quoteArgs = True  }
-          Async    {} -> ScriptConfig { quoteArgs = False }
-          TopoSort {} -> ScriptConfig { quoteArgs = False }
-        unitSetupScript :: ConfiguredUnit -> IO BuildScript
+    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
           let pkgDir = getPkgDir fetchDir pu
-          setupPackage verbosity scriptConfig comp
+          setupPackage verbosity comp
             pkgDbDirs pkgDir puSetupDepends
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
           let pkgDir = getPkgDir fetchDir pu
-          in buildUnit verbosity scriptConfig comp
+          in buildUnit verbosity comp
                 pkgDbDirs pkgDir dest
                 (userUnitArgs pu)
                 depMap pu
@@ -427,7 +424,7 @@ buildPlan verbosity comp fetchDir0 destDir0
                 -- Setup the package.
                 withAbstractQSem do
                   setupScript <- unitSetupScript cu
-                  runBuildScript setupScript
+                  executeBuildScript setupScript
 
               -- Configure, build and install the unit.
               doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
@@ -445,7 +442,7 @@ buildPlan verbosity comp fetchDir0 destDir0
 
                 -- Build the unit!
                 withAbstractQSem $
-                  runBuildScript $ unitBuildScript pu
+                  executeBuildScript $ unitBuildScript pu
 
           -- Kick off setting up the packages...
           finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
@@ -459,18 +456,22 @@ buildPlan verbosity comp fetchDir0 destDir0
                             \NB: pass -j<N> for increased parallelism."
         for_ unitsToBuild \ ( cu, didSetup ) -> do
           when (isNothing didSetup) $
-            unitSetupScript cu >>= runBuildScript
-          runBuildScript (unitBuildScript cu)
+            unitSetupScript cu >>= executeBuildScript
+          executeBuildScript (unitBuildScript cu)
 
       Script fp -> do
+        let scriptConfig :: ScriptConfig
+            scriptConfig =
+              ScriptConfig { quoteArgs = True, scriptStyle = hostStyle }
+
         normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
-        allScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
+        buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
           mbSetup <- if   isNothing didSetup
                      then unitSetupScript cu
-                     else return []
+                     else return emptyBuildScript
           let build = unitBuildScript cu
-          return $ mbSetup ++ build
-        Text.appendFile fp $ script $ concat allScripts
+          return $ mbSetup <> build
+        Text.appendFile fp $ script scriptConfig $ mconcat buildScripts
 
   where
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -31,6 +32,10 @@ module BuildEnv.Config
   , quietMsg, normalMsg, verboseMsg, debugMsg
   , ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
 
+    -- * OS specifics
+  , Style(..), hostStyle
+  , runCwdExe, pATHSeparator
+
   ) where
 
 -- base
@@ -47,7 +52,7 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>), dropDrive )
+  ( (</>), (<.>), dropDrive )
 
 -- text
 import Data.Text
@@ -196,3 +201,33 @@ cabalVerbosity (Verbosity i)
 cabalVerbosity (Verbosity 2) = "-v1"
 cabalVerbosity (Verbosity 3) = "-v2"
 cabalVerbosity (Verbosity _) = "-v3"
+
+--------------------------------------------------------------------------------
+-- Posix/Windows style differences.
+
+-- | Whether to use Posix or Windows style:
+--
+--  - for executables, @./prog@ vs @prog.exe@,
+--  - for the path separator, @:@ vs @;@.
+data Style
+  = PosixStyle
+  | WinStyle
+
+-- | Command to run an executable in the current working directory.
+runCwdExe :: Style -> FilePath -> FilePath
+runCwdExe PosixStyle exe = "./" <> exe
+runCwdExe WinStyle   exe = exe <.> "exe"
+
+-- | OS-dependent separator for the PATH environment variable.
+pATHSeparator :: Style -> String
+pATHSeparator PosixStyle = ":"
+pATHSeparator WinStyle   = ";"
+
+-- | The style for the OS the program is currently running on.
+hostStyle :: Style
+hostStyle =
+#if defined(mingw32_HOST_OS)
+  WinStyle
+#else
+  PosixStyle
+#endif

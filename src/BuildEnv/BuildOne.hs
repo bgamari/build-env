@@ -39,7 +39,7 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>), (<.>) )
+  ( (</>) )
 
 -- text
 import Data.Text
@@ -47,20 +47,16 @@ import Data.Text
 import qualified Data.Text as Text
   ( unpack )
 
--- transformers
-import Control.Monad.Trans.Writer.CPS
-   ( execWriter )
-
 -- build-env
 import BuildEnv.Config
-import BuildEnv.Utils
-  ( CallProcess(..), exe
-  , withQSem, noSem
-  )
 import BuildEnv.CabalPlan
 import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Script
+import BuildEnv.Utils
+  ( CallProcess(..)
+  , withQSem, noSem
+  )
 
 --------------------------------------------------------------------------------
 -- Setup
@@ -69,13 +65,12 @@ import BuildEnv.Script
 --
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
-             -> ScriptConfig
              -> Compiler
              -> PkgDbDirs
              -> PkgDir
              -> [UnitId] -- ^ @UnitId@s of @setup-depends@
              -> IO BuildScript
-setupPackage verbosity scriptCfg
+setupPackage verbosity
              ( Compiler { ghcPath } )
              ( PkgDbDirs { tempPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir } )
@@ -83,7 +78,8 @@ setupPackage verbosity scriptCfg
 
   = do -- Find the appropriate Setup.hs file (creating one if necessary)
        setupHs <- findSetupHs pkgDir
-       return $ execWriter do
+       return do
+         scriptCfg <- askScriptConfig
          let setupArgs = [ quoteArg scriptCfg setupHs
                          , "-o"
                          , quoteArg scriptCfg (pkgDir </> "Setup")
@@ -140,7 +136,6 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- Note: executing the build script will fail if the unit has already been
 -- registered in the package database.
 buildUnit :: Verbosity
-          -> ScriptConfig
           -> Compiler
           -> PkgDbDirs -- ^ package database directories (see 'getPkgDbDirs')
           -> PkgDir    -- ^ package directory (see 'getPkgDir')
@@ -150,7 +145,7 @@ buildUnit :: Verbosity
           -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
           -> ConfiguredUnit -- ^ the unit to build
           -> BuildScript
-buildUnit verbosity scriptCfg
+buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
           ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir
                       , tempPkgDbSem, finalPkgDbSem } )
@@ -168,7 +163,8 @@ buildUnit verbosity scriptCfg
           | otherwise
           = compName
 
-    in execWriter do
+    in do
+      scriptCfg <- askScriptConfig
 
       -- Configure
       let flagsArg = case puFlags unit of
@@ -176,7 +172,7 @@ buildUnit verbosity scriptCfg
               | flagSpecIsEmpty flags
               -> []
               | otherwise
-              -> [ "--flags=\"" ++ Text.unpack (showFlagSpec flags) ++ "\"" ]
+              -> [ "--flags=" ++ quoteArg scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
           buildDir = quoteArg scriptCfg $ pkgDir </> "dist" </> thisUnitId
           configureArgs = [ "--with-compiler", quoteArg scriptCfg ghcPath
                           , "--prefix", quoteArg scriptCfg prefix
@@ -191,7 +187,7 @@ buildUnit verbosity scriptCfg
                             ++ map ( dependencyArg plan unit )
                                 ( Configured.puDepends unit )
                           ++ [ buildTarget unit ]
-          setupExe = "./" <> "Setup" <.> exe
+          setupExe = runCwdExe (scriptStyle scriptCfg) "Setup"
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
