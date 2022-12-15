@@ -191,7 +191,7 @@ buildUnit verbosity scriptCfg
                             ++ map ( dependencyArg plan unit )
                                 ( Configured.puDepends unit )
                           ++ [ buildTarget unit ]
-          setupExe = pkgDir </> "Setup" <.> exe
+          setupExe = "./" <> "Setup" <.> exe
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $

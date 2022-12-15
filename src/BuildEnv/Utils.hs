@@ -43,6 +43,10 @@ import Data.Map.Strict
 import qualified Data.Map.Strict as Map
   ( alter, fromList, toList )
 
+-- directory
+import System.Directory
+  ( withCurrentDirectory )
+
 -- process
 import qualified System.Process as Proc
 
@@ -64,6 +68,9 @@ data CallProcess
   = CP
   { cwd          :: FilePath
      -- ^ working directory
+     --
+     -- NB: this @cwd@ applies __before__ executing 'prog'.
+     -- This is different from the @cwd@ of 'System.Process.createProcess'.
   , extraPATH    :: [FilePath]
      -- ^ filepaths to add to PATH
   , extraEnvVars :: [(String, String)]
@@ -84,7 +91,8 @@ data CallProcess
 --
 -- See 'CallProcess' for a description of the options.
 callProcessInIO :: HasCallStack => CallProcess -> IO ()
-callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
+callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) =
+  withCurrentDirectory cwd do
     env <-
       if null extraPATH && null extraEnvVars
       then return Nothing
@@ -94,7 +102,7 @@ callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
               return $ Just env2
     let processArgs =
           ( Proc.proc prog args )
-            { Proc.cwd = Just cwd
+            { Proc.cwd = Nothing -- CWD set from the outside
             , Proc.env = env }
     res <- withAbstractQSem sem do
       (_, _, _, ph) <- Proc.createProcess processArgs
