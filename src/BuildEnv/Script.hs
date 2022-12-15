@@ -103,23 +103,22 @@ stepScript :: BuildStep -> [ Text ]
 stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
-    [ "( exe=\"$(realpath " <> q prog <> ")\" ; \\"
-    , "  cd " <> q cwd <> " ; \\" ]
+    [ "( cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
     ++
-    [ "  \"exe\" " <> argsText <> " )"
+    [ "  " <> cmd <> " )"
     , resVar <> "=$?"
     , "if [ \"${" <> resVar <> "}\" -eq 0 ]"
     , "then true"
     , "else"
     , "  echo \"callProcess failed with non-zero exit code. Command:\""
-    , "  echo \"> " <> q prog <> " " <> argsText <> " \""
+    , "  echo \"> " <> cmd <> " \""
     , "  exit \"${" <> resVar <> "}\""
     , "fi" ]
   where
-    argsText :: Text
-    argsText = Text.unwords (map Text.pack args)
+    cmd :: Text
+    cmd = q prog <> " " <> Text.unwords (map Text.pack args)
       -- Don't quote the arguments: arguments which needed quoting will have
       -- been quoted using the 'quoteArg' function.
       --
