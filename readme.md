@@ -75,6 +75,31 @@ $ ./build_lens.sh
 The downside is that we lose any parallelism from this approach, as the
 generated build script is inherently sequential.
 
+### Bootstrap arguments
+
+If your build environment provides additional variables that need to be passed
+to the build script, you can pass them to the shell script using variables.
+
+For example, in the local environment, you can first obtain all the information
+needed to return a build script:
+
+```
+$ build-env fetch lens -f sources --output-plan myPlan.json
+```
+
+Next, compute a build script containing references to variables:
+
+```
+$ build-env build -p myPlan.json -f sources -o install --prefetched --configure-arg $myArgs --script script.sh
+```
+
+This will output a script which passes `$myArgs` to each `Setup configure`
+invocation. In the build environment, you can then set the value of `$myArgs`
+before running the shell script `script.sh`. Note that the build script
+__does not__ insert additional quotation marks around `$myArgs`, which allows
+passing multiple arguments at once (this is crucial when one doesn't know
+the number of arguments ahead of time).
+
 ## Specifying packages
 
 Instead of passing the required packages through the command line,
