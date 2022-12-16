@@ -126,7 +126,7 @@ optMode =
         info ( PlanMode  <$> planInputs Planning <*> optOutput )
         ( progDesc "Compute a build plan from a collection of seeds" )
     , command "fetch" $
-        info ( FetchMode <$> fetchDescription Fetching <*> newOrExisting )
+        info ( FetchMode <$> fetchDescription <*> newOrExisting )
         ( fullDesc <> progDesc "Fetch package sources" )
     , command "build" $
         info ( BuildMode <$> build )
@@ -303,21 +303,21 @@ plan modeDesc = ( UsePlan <$> optPlanPath )
 
 -- | Parse information about fetched sources: in which directory they belong,
 -- and what build plan they correspond to.
-fetchDescription :: ModeDescription -> Parser FetchDescription
-fetchDescription modeDesc = do
-  fetchInputPlan <- plan modeDesc
-  fetchDir       <- optFetchDir
+fetchDescription :: Parser FetchDescription
+fetchDescription = do
+  fetchInputPlan <- plan Fetching
+  fetchDir       <- optFetchDir Fetching
   return $ FetchDescription { fetchDir, fetchInputPlan }
 
+-- | Parse the fetch directory.
+optFetchDir :: ModeDescription -> Parser FilePath
+optFetchDir modeDesc =
+  option str
+    (  short 'f'
+    <> long "fetchdir"
+    <> help "Directory for fetched sources"
+    <> metavar metavarStr )
   where
-    optFetchDir :: Parser FilePath
-    optFetchDir =
-      option str
-        (  short 'f'
-        <> long "fetch-dir"
-        <> help "Directory for fetched sources"
-        <> metavar metavarStr )
-
     metavarStr :: String
     metavarStr = case modeDesc of
       Building -> "INDIR"
@@ -334,14 +334,16 @@ newOrExisting =
 build :: Parser Build
 build = do
 
-  buildFetchDescr <- fetchDescription Building
   buildFetch      <- optFetch
+  buildBuildPlan  <- plan Building
   buildStrategy   <- optStrategy
-  buildDestDir    <- optDestDir
+  buildDirs       <- optDirs
   userUnitArgs    <- optUnitArgs
 
-  return $ Build { buildFetch, buildFetchDescr
-                 , buildStrategy, buildDestDir
+  return $ Build { buildFetch
+                 , buildBuildPlan
+                 , buildStrategy
+                 , buildDirs
                  , userUnitArgs }
 
   where
@@ -372,8 +374,9 @@ build = do
         (  long "prefetched"
         <> help "Use prefetched sources instead of fetching from Hackage" )
 
-    optDestDir :: Parser (DestDir Raw)
-    optDestDir = do
+    optDirs :: Parser (Dirs Raw)
+    optDirs = do
+      fetchDir <- optFetchDir Building
       prefix <-
         option str (  short 'o'
                    <> long "prefix"
@@ -389,8 +392,10 @@ build = do
           (  long "preserve-dirs"
           <> help "Preserve prefix and destdir instead of canonicalising" )
       return $
-        DestDir
-          { destDir, prefix
+        Dirs
+          { fetchDir
+          , destDir
+          , prefix
           , installDir = preserveDirs
           }
 

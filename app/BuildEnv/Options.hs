@@ -89,9 +89,9 @@ data Plan
   -- | Compute a plan.
   = ComputePlan
       PlanInputs
-        -- ^ input needed to compute the plan
+        -- ^ Input needed to compute the plan.
       (Maybe FilePath)
-        -- ^ optional filepath at which to write out the computed plan
+        -- ^ Optional filepath at which to write out the computed plan.
 
   -- | Use an existing @plan.json@ by reading the given file.
   | UsePlan
@@ -117,16 +117,18 @@ data NewOrExisting
 -- | Information needed to perform a build.
 data Build
   = Build
-    { buildFetch      :: Fetch
+    { buildDirs       :: Dirs Raw
+      -- ^ The directories relevant for the build:
+      --
+      --  - fetched sources directory,
+      --  - build output directory structure.
+    , buildFetch      :: Fetch
       -- ^ How to obtain the fetched sources,
       -- including the build plan.
-    , buildFetchDescr :: FetchDescription
-      -- ^ Where the fetch sources are located,
-      -- and the build plan they correspond to.
+    , buildBuildPlan  :: Plan
+      -- ^ The build plan to follow.
     , buildStrategy   :: BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
-    , buildDestDir    :: DestDir Raw
-      -- ^ The output directory for the build.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
       -- ^ Extra per-unit arguments.
     }
