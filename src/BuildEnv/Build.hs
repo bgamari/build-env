@@ -344,6 +344,8 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- registered in the package database.
 buildPlan :: Verbosity
           -> Compiler
+          -> FilePath -- ^ working directory
+                      -- (used only to make local packages relative)
           -> Dirs Raw -- ^ directory structure
           -> BuildStrategy
           -> ( ConfiguredUnit -> UnitArgs )
@@ -351,7 +353,7 @@ buildPlan :: Verbosity
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
 buildPlan verbosity comp
-          destDir0
+          workDir destDir0
           buildStrat
           userUnitArgs
           cabalPlan
@@ -407,14 +409,14 @@ buildPlan verbosity comp
 
     let unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
-          let pkgDirCan = getPkgDir dirs    pu
-              pkgDirOut = getPkgDir outDirs pu
+          let pkgDirCan = getPkgDir workDir dirs    pu
+              pkgDirOut = getPkgDir workDir outDirs pu
           setupPackage verbosity compForOutput
             pkgDbDirsOut pkgDirCan pkgDirOut
             puSetupDepends
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
-          let pkgDir = getPkgDir outDirs pu
+          let pkgDir = getPkgDir workDir outDirs pu
           in buildUnit verbosity compForOutput
                 pkgDbDirsOut pkgDir outDirs
                 (userUnitArgs pu)
