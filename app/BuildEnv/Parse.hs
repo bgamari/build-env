@@ -63,15 +63,26 @@ options currWorkDir = do
 optCompiler :: Parser Compiler
 optCompiler =
     Compiler
-      <$> option str (long "ghc" <> value "ghc" <> help "'ghc' executable path" <> metavar "GHC")
-      <*> option str (long "ghc-pkg" <> value "ghc-pkg" <> help "'ghc-pkg' executable path" <> metavar "GHC-PKG")
+      <$> option str
+            (  long "ghc"
+            <> value "ghc"
+            <> help "'ghc' executable path"
+            <> metavar "GHC"
+            )
+      <*> option str
+            (  long "ghc-pkg"
+            <> value "ghc-pkg"
+            <> help "'ghc-pkg' executable path"
+            <> metavar "GHC-PKG"
+            )
 
 -- | Parse @cabal@ path.
 optCabal :: Parser Cabal
 optCabal = do
   cabalPath <-
     option str
-      (  long "cabal" <> value "cabal"
+      (  long "cabal"
+      <> value "cabal"
       <> help "'cabal' executable path"
       <> metavar "CABAL" )
   globalCabalArgs <-
@@ -84,7 +95,8 @@ optCabal = do
 optChangeWorkingDirectory :: FilePath -> Parser FilePath
 optChangeWorkingDirectory currWorkDir =
     option str
-      (  long "cwd" <> value currWorkDir
+      (  long "cwd"
+      <> value currWorkDir
       <> help "Set working directory"
       <> metavar "DIR" )
 
@@ -123,7 +135,11 @@ optMode =
   where
     optOutput :: Parser FilePath
     optOutput =
-      option str ( short 'p' <> long "plan" <> help "Output 'plan.json' file" <> metavar "OUTFILE" )
+      option str (  short 'p'
+                 <> long "plan"
+                 <> help "Output 'plan.json' file"
+                 <> metavar "OUTFILE"
+                 )
 
 
 -- | Description of which mode we are in.
