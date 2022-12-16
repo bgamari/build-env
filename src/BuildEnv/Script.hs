@@ -221,7 +221,7 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     , "then true"
     , "else"
     , "  echo \"callProcess failed with non-zero exit code. Command:\""
-    , "  echo \"> " <> cmd <> " \""
+    , "  echo " <> cmd
     , "  exit \"${" <> resVar <> "}\""
     , "fi" ]
   where
@@ -246,7 +246,6 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
       = [  "  export PATH=$PATH:"
         <> Text.intercalate ":" (map q extraPATH)
         <> " ; \\" ]
-
 
     mkEnvVar :: (String, String) -> Text
     mkEnvVar (var,val) = "  export "
