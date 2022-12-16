@@ -24,7 +24,7 @@ module BuildEnv.Script
   , step, callProcess, logMessage
 
     -- ** Configuring build scripts
-  , ScriptConfig(..), hostRunCfg
+  , ScriptOutput(..), ScriptConfig(..), hostRunCfg
   , quoteArg, q
 
     -- * Interpreting build scripts
@@ -126,10 +126,28 @@ logMessage v msg_v msg
 --------------------------------------------------------------------------------
 -- Configuration
 
+-- | How to interpret the build script: run it in 'IO', or turn it
+-- into a shell script?
+data ScriptOutput
+  -- | Run the build script in 'IO'
+  = Run
+  -- | Generate a shell script.
+  | Shell
+    { useVariables :: Bool
+      -- ^ Replace various values with variables, so that
+      -- they can be set before running the build script.
+      --
+      -- Values:
+      --
+      --  - @GHC@ and @GHC-PKG@,
+      --  - fetched sources directory @SOURCES@,
+      --  - @PREFIX@ and @DESTDIR@.
+    }
+
 -- | Configuration options for a 'BuildScript'.
 data ScriptConfig
   = ScriptConfig
-  { outputShell :: !Bool
+  { scriptOutput :: !ScriptOutput
     -- ^ Whether we are outputting a shell script.
     --
     -- Used for the following decisions:
@@ -147,8 +165,8 @@ data ScriptConfig
 hostRunCfg :: ScriptConfig
 hostRunCfg =
   ScriptConfig
-    { outputShell = False
-    , scriptStyle = hostStyle }
+    { scriptOutput = Run
+    , scriptStyle  = hostStyle }
 
 -- | Quote a string, to avoid spaces causing the string
 -- to be interpreted as multiple arguments.
@@ -173,11 +191,10 @@ q t = "\"" <> fromString (escapeArg t) <> "\""
 -- No need to call this on the 'cwd' or 'prog' fields of 'CallProcess',
 -- as these will be quoted by the shell-script backend no matter what.
 quoteArg :: ( IsString r, Monoid r ) => ScriptConfig -> String -> r
-quoteArg ( ScriptConfig { outputShell } )
-  | outputShell
-  = q
-  | otherwise
-  = fromString
+quoteArg ( ScriptConfig { scriptOutput } ) =
+  case scriptOutput of
+    Run      -> fromString
+    Shell {} -> q
 
 --------------------------------------------------------------------------------
 -- Interpretation

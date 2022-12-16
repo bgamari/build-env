@@ -1,4 +1,6 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Module      :  BuildEnv.BuildOne
@@ -18,8 +20,10 @@ module BuildEnv.BuildOne
 
     -- $twoDBs
 
-  , PkgDir(..), getPkgDir
-  , PkgDbDirs(..), getPkgDbDirs
+  , PkgDir(..)
+  , getPkgDir
+  , PkgDbDirs(..)
+  , getPkgDbDirsCan, getPkgDbDirsOut
   ) where
 
 -- base
@@ -27,6 +31,8 @@ import Control.Concurrent
   ( QSem, newQSem )
 import Data.Foldable
   ( for_ )
+import Data.Kind
+  ( Type )
 
 -- containers
 import Data.Map.Strict
@@ -66,23 +72,25 @@ import BuildEnv.Utils
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
              -> Compiler
-             -> PkgDbDirs
-             -> PkgDir
+             -> PkgDbDirs ForOutput
+             -> PkgDir    Canonicalised
+             -> PkgDir    ForOutput
              -> [UnitId] -- ^ @UnitId@s of @setup-depends@
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
-             ( PkgDbDirs { tempPkgDbDir } )
-             ( PkgDir { pkgNameVer, pkgDir } )
+             ( PkgDbDirsOut { tempPkgDbDir } )
+             ( PkgDir { pkgNameVer, pkgDir = pkgDirCan } )
+             ( PkgDir { pkgDir = pkgDirOut } )
              setupDepIds
 
   = do -- Find the appropriate Setup.hs file (creating one if necessary)
-       setupHs <- findSetupHs pkgDir
+       setupHs <- findSetupHs pkgDirCan
        return do
          scriptCfg <- askScriptConfig
-         let setupArgs = [ quoteArg scriptCfg setupHs
+         let setupArgs = [ quoteArg scriptCfg (pkgDirOut </> setupHs)
                          , "-o"
-                         , quoteArg scriptCfg (pkgDir </> "Setup")
+                         , quoteArg scriptCfg (pkgDirOut </> "Setup")
                          , "-package-db=" ++ quoteArg scriptCfg tempPkgDbDir
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg setupDepIds
@@ -105,12 +113,12 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
     useDefaultSetupHs = do
         let path = root </> "Setup.hs"
         writeFile path defaultSetupHs
-        return path
+        return "Setup.hs"
 
     try fname = do
         let path = root </> fname
         exists <- doesFileExist path
-        return $ if exists then Just path else Nothing
+        return $ if exists then Just fname else Nothing
 
     defaultSetupHs = unlines
         [ "import Distribution.Simple"
@@ -137,9 +145,9 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- registered in the package database.
 buildUnit :: Verbosity
           -> Compiler
-          -> PkgDbDirs -- ^ package database directories (see 'getPkgDbDirs')
-          -> PkgDir    -- ^ package directory (see 'getPkgDir')
-          -> Dirs Canonicalised
+          -> PkgDbDirs ForOutput -- ^ package database directories (see 'getPkgDbDirs')
+          -> PkgDir    ForOutput -- ^ package directory (see 'getPkgDir')
+          -> Dirs ForOutput
                       -- ^ directory structure
           -> UnitArgs -- ^ extra arguments for this unit
           -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
@@ -147,9 +155,13 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
-          ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir
-                      , tempPkgDbSem, finalPkgDbSem } )
-          ( PkgDir { pkgNameVer, pkgDir } )
+          ( PkgDbDirsOut
+            { tempPkgDbDir
+            , finalPkgDbDir
+            , tempPkgDbSem
+            , finalPkgDbSem } )
+          ( PkgDir { pkgDir
+                   , pkgNameVer } )
           ( Dirs { installDir, prefix, destDir } )
           ( UnitArgs { configureArgs = userConfigureArgs
                      , mbHaddockArgs = mbUserHaddockArgs
@@ -382,14 +394,24 @@ haven't been copied over yet.
 -- | The package database directories.
 --
 -- See Note [Using two package databases].
-data PkgDbDirs
-  = PkgDbDirs
-    { tempPkgDbDir  :: FilePath
+type PkgDbDirs :: PathType -> Type
+data family PkgDbDirs pathTy
+
+data instance PkgDbDirs Canonicalised
+  = PkgDbDirsCan
+    { tempPkgDbDir  :: StagedPath Canonicalised
+        -- ^ Local package database directory
+    , finalPkgDbDir :: StagedPath Canonicalised
+        -- ^ Installation package database directory
+    }
+data instance PkgDbDirs ForOutput
+  = PkgDbDirsOut
+    { tempPkgDbDir  :: StagedPath ForOutput
         -- ^ Local package database directory
     , tempPkgDbSem  :: QSem
         -- ^ Semaphore controlling access to the temporary
         -- package database.
-    , finalPkgDbDir :: FilePath
+    , finalPkgDbDir :: StagedPath ForOutput
         -- ^ Installation package database directory
     , finalPkgDbSem :: QSem
         -- ^ Semaphore controlling access to the installation
@@ -397,38 +419,50 @@ data PkgDbDirs
     }
 
 -- | Compute the paths of the package database directories we are going
+-- to use.
+--
+-- See Note [Using two package databases].
+getPkgDbDirsCan :: Dirs Canonicalised -> PkgDbDirs Canonicalised
+getPkgDbDirsCan ( Dirs { fetchDir, installDir } ) =
+    PkgDbDirsCan { tempPkgDbDir, finalPkgDbDir }
+    where
+      tempPkgDbDir  = fetchDir   </> "package.conf"
+      finalPkgDbDir = installDir </> "package.conf"
+
+-- | Compute the paths of the package database directories we are going
 -- to use, and create some semaphores to control access to them
 -- in order to avoid contention.
 --
 -- See Note [Using two package databases].
-getPkgDbDirs :: FilePath -- ^ fetched sources directory
-             -> FilePath -- ^ installation directory
-             -> IO PkgDbDirs
-getPkgDbDirs fetchDir installDir = do
+getPkgDbDirsOut :: Dirs ForOutput -> IO (PkgDbDirs ForOutput)
+getPkgDbDirsOut ( Dirs { fetchDir, installDir } ) = do
   tempPkgDbSem  <- newQSem 1
   finalPkgDbSem <- newQSem 1
   return $
-    PkgDbDirs { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
+    PkgDbDirsOut { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
     where
       tempPkgDbDir  = fetchDir   </> "package.conf"
       finalPkgDbDir = installDir </> "package.conf"
 
 -- | The package @name-version@ string and its directory.
-data PkgDir
+type PkgDir :: PathType -> Type
+data PkgDir pathTy
   = PkgDir
     { pkgNameVer    :: String
         -- ^ Package @name-version@ string
-    , pkgDir        :: FilePath
+    , pkgDir        :: StagedPath pathTy
         -- ^ Package directory
     }
 
 -- | Compute some directory paths relevant to installation and registration
 -- of a package.
-getPkgDir :: FilePath       -- ^ fetched sources directory
+getPkgDir :: (StagedPath pathTy ~ FilePath)
+          => Dirs pathTy
           -> ConfiguredUnit -- ^ any unit from the package in question
-          -> PkgDir
-getPkgDir fetchDir ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } ) =
-  PkgDir { pkgNameVer, pkgDir }
+          -> PkgDir pathTy
+getPkgDir ( Dirs { fetchDir } )
+          ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } )
+  = PkgDir { pkgNameVer, pkgDir }
     where
       pkgNameVer = Text.unpack $ pkgNameVersion puPkgName puVersion
       pkgDir
@@ -439,11 +473,11 @@ getPkgDir fetchDir ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } ) =
 
 -- | Command to run an executable located the current working directory.
 runCwdExe :: ScriptConfig -> FilePath -> FilePath
-runCwdExe ( ScriptConfig { outputShell, scriptStyle } )
+runCwdExe ( ScriptConfig { scriptOutput, scriptStyle } )
   = pre . ext
   where
     pre
-      | not outputShell
+      | Run      <- scriptOutput
       , WinStyle <- scriptStyle
       = id
       | otherwise

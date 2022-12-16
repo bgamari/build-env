@@ -359,10 +359,17 @@ build = do
         <> metavar "NUM_THREADS" )
 
     script :: Parser BuildStrategy
-    script = option (Script <$> str)
-        (  long "script"
-        <> help "Output a shell script containing build steps"
-        <> metavar "OUTFILE" )
+    script = do
+      scriptPath <-
+        option str
+          (  long "script"
+          <> help "Output a shell script containing build steps"
+          <> metavar "OUTFILE" )
+      useVariables <-
+        switch
+          (  long "variables"
+          <> help "Use variables in the shell script output" )
+      return $ Script { scriptPath, useVariables }
 
     optFetch :: Parser Fetch
     optFetch =
@@ -387,16 +394,12 @@ build = do
                    <> help "Installation destination directory"
                    <> value "/"
                    <> metavar "OUTDIR" )
-      preserveDirs <-
-        flag CanonicaliseDirs PreserveDirs
-          (  long "preserve-dirs"
-          <> help "Preserve prefix and destdir instead of canonicalising" )
       return $
         Dirs
           { fetchDir
           , destDir
           , prefix
-          , installDir = preserveDirs
+          , installDir = ()
           }
 
     -- TODO: we only support passing arguments for all units at once,

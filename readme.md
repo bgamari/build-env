@@ -101,10 +101,9 @@ passing multiple arguments at once (this is crucial when one doesn't know
 the number of arguments ahead of time).
 
 If you want to set `--fetchdir`, `--prefix` or `--destdir` to variables,
-you should pass the `--preserve-dirs` flag, which will skip the step
-that attempts to make these paths absolute.  
-In that case, the variables should expand to absolute paths, as is usually
-required for `prefix` and `destdir`.
+you should pass the `--variables` flag. This will set these to the values
+`$SOURCES`, `$PREFIX` and `$DESTDIR` in the output shell script, respectively.
+It will also use `$GHC` and `$GHCPKG` variables for the compiler.
 
 ## Specifying packages
 
