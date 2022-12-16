@@ -195,7 +195,7 @@ dirsForOutput useVars ( Dirs { fetchDir, destDir, prefix, installDir })
   = Dirs { fetchDir   = "$SOURCES"
          , prefix     = "$PREFIX"
          , destDir    = "$DESTDIR"
-         , installDir = "$DESTDIR/$PREFIX" }
+         , installDir = "$DESTDIR" </> "$PREFIX" }
   | otherwise
   = Dirs { fetchDir, destDir, prefix, installDir }
 
