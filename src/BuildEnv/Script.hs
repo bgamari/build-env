@@ -129,10 +129,16 @@ logMessage v msg_v msg
 -- | Configuration options for a 'BuildScript'.
 data ScriptConfig
   = ScriptConfig
-  { quoteArgs   :: !Bool
-    -- ^ Whether to add quotes around command-line arguments,
-    -- to avoid an argument with spaces being interpreted
-    -- as multiple arguments.
+  { outputShell :: !Bool
+    -- ^ Whether we are outputting a shell script.
+    --
+    -- Used for the following decisions:
+    --
+    --  - to add quotes around command-line arguments,
+    --    to avoid an argument with spaces being interpreted
+    --    as multiple arguments,
+    --  - to unconditionally add @./@ to run an executable
+    --    in the current working directory.
   , scriptStyle :: !Style
     -- ^ Whether to use Posix or Windows style conventions.
   }
@@ -141,7 +147,7 @@ data ScriptConfig
 hostRunCfg :: ScriptConfig
 hostRunCfg =
   ScriptConfig
-    { quoteArgs   = False
+    { outputShell = False
     , scriptStyle = hostStyle }
 
 -- | Quote a string, to avoid spaces causing the string
@@ -167,8 +173,8 @@ q t = "\"" <> fromString (escapeArg t) <> "\""
 -- No need to call this on the 'cwd' or 'prog' fields of 'CallProcess',
 -- as these will be quoted by the shell-script backend no matter what.
 quoteArg :: ( IsString r, Monoid r ) => ScriptConfig -> String -> r
-quoteArg ( ScriptConfig { quoteArgs } )
-  | quoteArgs
+quoteArg ( ScriptConfig { outputShell } )
+  | outputShell
   = q
   | otherwise
   = fromString

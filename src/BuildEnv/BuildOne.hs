@@ -39,7 +39,7 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>) )
+  ( (</>), (<.>) )
 
 -- text
 import Data.Text
@@ -187,7 +187,7 @@ buildUnit verbosity
                             ++ map ( dependencyArg plan unit )
                                 ( Configured.puDepends unit )
                           ++ [ buildTarget unit ]
-          setupExe = runCwdExe (scriptStyle scriptCfg) "Setup"
+          setupExe = runCwdExe scriptCfg "Setup"
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
@@ -436,3 +436,20 @@ getPkgDir fetchDir ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } ) =
         = dir
         | otherwise
         = fetchDir </> pkgNameVer
+
+-- | Command to run an executable located the current working directory.
+runCwdExe :: ScriptConfig -> FilePath -> FilePath
+runCwdExe ( ScriptConfig { outputShell, scriptStyle } )
+  = pre . ext
+  where
+    pre
+      | not outputShell
+      , WinStyle <- scriptStyle
+      = id
+      | otherwise
+      = ( "./" <> )
+    ext
+      | WinStyle <- scriptStyle
+      = ( <.> "exe" )
+      | otherwise
+      = id
