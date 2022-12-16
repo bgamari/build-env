@@ -45,7 +45,9 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>), (<.>) )
+  ( (</>), (<.>)
+  , makeRelative
+  )
 
 -- text
 import Data.Text
@@ -185,7 +187,7 @@ buildUnit verbosity
               -> []
               | otherwise
               -> [ "--flags=" ++ quoteArg scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
-          buildDir = quoteArg scriptCfg $ pkgDir </> "dist" </> thisUnitId
+          buildDir = "dist" </> thisUnitId
           configureArgs = [ "--with-compiler", quoteArg scriptCfg ghcPath
                           , "--prefix", quoteArg scriptCfg prefix
                           , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
@@ -277,8 +279,7 @@ buildUnit verbosity
         Lib -> do
           -- Register library (in both the local and final package databases)
           -- See Note [Using two package databases].
-          let pkgRegsFile = quoteArg scriptCfg
-                          $ pkgDir </> ( thisUnitId <> "-pkg-reg.conf" )
+          let pkgRegsFile = thisUnitId <> "-pkg-reg.conf"
               dirs = [ ( tempPkgDbDir,  tempPkgDbSem, "temporary", ["--inplace"], [])
                      , (finalPkgDbDir, finalPkgDbSem, "final"    , [], "--force" : userGhcPkgArgs) ]
 
@@ -308,7 +309,7 @@ buildUnit verbosity
 
             -- ghc-pkg register
             callProcess $
-              CP { cwd          = "."
+              CP { cwd          = pkgDir
                  , prog         = ghcPkgPath
                  , args         = [ "register"
                                   , ghcPkgVerbosity verbosity
@@ -457,17 +458,20 @@ data PkgDir pathTy
 -- | Compute some directory paths relevant to installation and registration
 -- of a package.
 getPkgDir :: (StagedPath pathTy ~ FilePath)
-          => Dirs pathTy
+          => FilePath -- ^ working directory
+          -> Dirs pathTy
           -> ConfiguredUnit -- ^ any unit from the package in question
           -> PkgDir pathTy
-getPkgDir ( Dirs { fetchDir } )
+getPkgDir workDir ( Dirs { fetchDir } )
           ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } )
   = PkgDir { pkgNameVer, pkgDir }
     where
       pkgNameVer = Text.unpack $ pkgNameVersion puPkgName puVersion
       pkgDir
         | Local dir <- puPkgSrc
-        = dir
+        = makeRelative workDir dir
+          -- Give local packages paths relative to the working directory,
+          -- to enable relocatable build scripts.
         | otherwise
         = fetchDir </> pkgNameVer
 

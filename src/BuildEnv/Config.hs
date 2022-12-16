@@ -190,7 +190,7 @@ canonicalizeDirs ( Dirs { fetchDir = fetchDir0
 dirsForOutput :: Bool -- ^ use variables?
               -> Dirs Canonicalised
               -> Dirs ForOutput
-dirsForOutput useVars ( Dirs { fetchDir, destDir, prefix, installDir })
+dirsForOutput useVars ( Dirs { fetchDir, destDir, prefix, installDir } )
   | useVars
   = Dirs { fetchDir   = "${SOURCES}"
          , prefix     = "${PREFIX}"

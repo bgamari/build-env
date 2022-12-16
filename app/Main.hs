@@ -57,7 +57,7 @@ main = do
         case buildFetch of
           Prefetched     -> return ()
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
-        buildPlan verbosity compiler buildDirs buildStrategy
+        buildPlan verbosity compiler workDir buildDirs buildStrategy
           userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
