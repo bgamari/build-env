@@ -21,9 +21,8 @@ module BuildEnv.Config
   , Compiler(..), Cabal(..)
 
     -- * Directory structure
-  , Dirs(..), PathType(..), InstallDir
-  , PreserveDirs(..)
-  , canonicalizeDirs
+  , Dirs(..), PathType(..), StagedPath
+  , canonicalizeDirs, dirsForOutput
 
     -- ** Handling of temporary directories
   , TempDirPermanence(..)
@@ -73,7 +72,19 @@ data BuildStrategy
   -- waiting on its dependencies.
   | Async Word8
   -- | Output a build script that can be run later.
-  | Script FilePath
+  | Script
+    { scriptPath :: FilePath
+      -- ^ Output path at which to write the build script.
+    , useVariables :: Bool
+      -- ^ Replace various values with variables, so that
+      -- they can be set before running the build script.
+      --
+      -- Values:
+      --
+      --  - @GHC@ and @GHC-PKG@,
+      --  - fetched sources directory @SOURCES@,
+      --  - @PREFIX@ and @DESTDIR@.
+    }
   deriving stock Show
 
 --------------------------------------------------------------------------------
@@ -125,8 +136,7 @@ data Compiler =
 --
 -- - 'Raw': filepaths can be relative.
 -- - 'Canonicalised': the filepaths must be absolute.
---    If outputting a shell script, they can be variables that expand
---    to absolute paths.
+-- - 'ForOutput': filepaths may be variables (when outputting a shell script).
 type Dirs :: PathType -> Type
 data Dirs pathTy =
   Dirs
@@ -136,48 +146,31 @@ data Dirs pathTy =
       -- ^ Output build @destdir@.
     , prefix      :: FilePath
       -- ^ Output build @prefix@.
-    , installDir  :: InstallDir pathTy
-      -- ^ - 'Raw' stage: whether @destdir@ and @prefix@ should be canonicalised.
+    , installDir  :: StagedPath pathTy
+      -- ^ - 'Raw' stage: trivial value.
       --   - 'Canonicalised' stage: the output installation directory @destdir/prefix@.
     }
 
-deriving stock instance Show (InstallDir pathTy) => Show (Dirs pathTy)
+deriving stock instance Show (StagedPath pathTy) => Show (Dirs pathTy)
 
-data PathType = Raw | Canonicalised
+data PathType = Raw | Canonicalised | ForOutput
 
 -- | We need to canonicalise paths before computing an installation directory.
 --
 -- This type family keeps track of this canonicalisation step.
-type InstallDir :: PathType -> Type
-type family InstallDir pathTy where
-  InstallDir Raw           = PreserveDirs
-  InstallDir Canonicalised = FilePath
-
--- | Whether to preserve the input @prefix@, and @destdir@ paths,
--- or to canonicalise them (making them absolute).
-data PreserveDirs
-    -- | Canonicalise fetched sources, @prefix@ and @destdir@ directories.
-  = CanonicaliseDirs
-    -- | Preserve fetched sources, @prefix@ and @destdir@ paths
-    -- as they were given, setting @installdir=destdir/prefix@.
-  | PreserveDirs
-  deriving stock Show
+type StagedPath :: PathType -> Type
+type family StagedPath pathTy where
+  StagedPath Raw           = ()
+  StagedPath Canonicalised = FilePath
+  StagedPath ForOutput     = FilePath
 
 -- | Canonicalise 'Dirs', computing the appropriate
 -- installation directory @destdir/prefix@.
 canonicalizeDirs :: Dirs Raw -> IO (Dirs Canonicalised)
-canonicalizeDirs ( Dirs { fetchDir   = fetchDir0
-                        , destDir    = destDir0
-                        , prefix     = prefix0
-                        , installDir = preserveDirs } )
-  = case preserveDirs of
-    PreserveDirs -> do
-      let installDir = destDir0 <> "/" <> prefix0
-      return $ Dirs { fetchDir = fetchDir0
-                    , destDir  = destDir0
-                    , prefix   = prefix0
-                    , installDir }
-    CanonicaliseDirs -> do
+canonicalizeDirs ( Dirs { fetchDir = fetchDir0
+                        , destDir  = destDir0
+                        , prefix   = prefix0 } )
+  = do
       fetchDir   <- canonicalizePath fetchDir0
       prefix     <- canonicalizePath prefix0
       destDir    <- canonicalizePath destDir0
@@ -189,6 +182,22 @@ canonicalizeDirs ( Dirs { fetchDir   = fetchDir0
         --
         -- We don't want that, as we *do* want to concatenate both paths.
       return $ Dirs { fetchDir, destDir, prefix, installDir }
+
+-- | Compute the directory structure we should use for output.
+--
+-- Replaces everything with variables if the boolean is 'True'; otherwise
+-- returns the input directory structure.
+dirsForOutput :: Bool -- ^ use variables?
+              -> Dirs Canonicalised
+              -> Dirs ForOutput
+dirsForOutput useVars ( Dirs { fetchDir, destDir, prefix, installDir })
+  | useVars
+  = Dirs { fetchDir   = "$SOURCES"
+         , prefix     = "$PREFIX"
+         , destDir    = "$DESTDIR"
+         , installDir = "$DESTDIR/$PREFIX" }
+  | otherwise
+  = Dirs { fetchDir, destDir, prefix, installDir }
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence

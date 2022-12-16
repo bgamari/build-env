@@ -58,6 +58,7 @@ common common
       , OverloadedStrings
       , StandaloneDeriving
       , StandaloneKindSignatures
+      , TypeOperators
       , ViewPatterns
 
     ghc-options:

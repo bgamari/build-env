@@ -92,14 +92,15 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildEnv.BuildOne
-  ( PkgDbDirs(..), getPkgDbDirs, getPkgDir
+  ( PkgDbDirs(..)
+  , getPkgDbDirsCan, getPkgDbDirsOut, getPkgDir
   , setupPackage, buildUnit )
 import BuildEnv.CabalPlan
 import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Config
 import BuildEnv.Script
-  ( BuildScript, ScriptConfig(..)
+  ( BuildScript, ScriptOutput(..), ScriptConfig(..)
   , emptyBuildScript
   , executeBuildScript, script
   )
@@ -355,19 +356,20 @@ buildPlan verbosity comp
           userUnitArgs
           cabalPlan
   = do
-    dest@( Dirs { fetchDir, installDir, prefix, destDir } )
+    dirs@( Dirs { installDir, prefix, destDir } )
       <- canonicalizeDirs destDir0
     createDirectoryIfMissing True installDir
 
     -- Create the package database directories (if they don't already exist).
     -- See Note [Using two package databases] in BuildOne.
-    pkgDbDirs@( PkgDbDirs { tempPkgDbDir, finalPkgDbDir } ) <-
-      getPkgDbDirs fetchDir installDir
+    let
+      PkgDbDirsCan { tempPkgDbDir, finalPkgDbDir } = getPkgDbDirsCan dirs
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
     when tempPkgDbExists $
      removeDirectoryRecursive tempPkgDbDir
        `catch` \ ( _ :: IOException ) -> return ()
-    mapM_ (createDirectoryIfMissing True) [ tempPkgDbDir, finalPkgDbDir ]
+    mapM_ (createDirectoryIfMissing True)
+      [ tempPkgDbDir, finalPkgDbDir ]
 
     normalMsg verbosity $ "\nPreparing packages for build"
     verboseMsg verbosity $
@@ -388,16 +390,33 @@ buildPlan verbosity comp
           , _ ) <- unitsToBuild
         ]
 
+    let useVars :: Bool
+        useVars = case buildStrat of
+                    Script { useVariables } -> useVariables
+                    _                       -> False
+        outDirs :: Dirs ForOutput
+        outDirs = dirsForOutput useVars dirs
+        compForOutput :: Compiler
+        compForOutput
+          | useVars
+          = Compiler { ghcPath = "$GHC", ghcPkgPath = "$GHCPKG" }
+          | otherwise
+          = comp
+
+    pkgDbDirsOut <- getPkgDbDirsOut outDirs
+
     let unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
-          let pkgDir = getPkgDir fetchDir pu
-          setupPackage verbosity comp
-            pkgDbDirs pkgDir puSetupDepends
+          let pkgDirCan = getPkgDir dirs    pu
+              pkgDirOut = getPkgDir outDirs pu
+          setupPackage verbosity compForOutput
+            pkgDbDirsOut pkgDirCan pkgDirOut
+            puSetupDepends
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
-          let pkgDir = getPkgDir fetchDir pu
-          in buildUnit verbosity comp
-                pkgDbDirs pkgDir dest
+          let pkgDir = getPkgDir outDirs pu
+          in buildUnit verbosity compForOutput
+                pkgDbDirsOut pkgDir outDirs
                 (userUnitArgs pu)
                 depMap pu
 
@@ -458,10 +477,11 @@ buildPlan verbosity comp
             unitSetupScript cu >>= executeBuildScript
           executeBuildScript (unitBuildScript cu)
 
-      Script fp -> do
+      Script { scriptPath = fp, useVariables } -> do
         let scriptConfig :: ScriptConfig
             scriptConfig =
-              ScriptConfig { outputShell = True, scriptStyle = hostStyle }
+              ScriptConfig { scriptOutput = Shell { useVariables }
+                           , scriptStyle  = hostStyle }
 
         normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
         buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
