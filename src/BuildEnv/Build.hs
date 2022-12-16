@@ -103,6 +103,7 @@ import BuildEnv.Script
   ( BuildScript, ScriptOutput(..), ScriptConfig(..)
   , emptyBuildScript
   , executeBuildScript, script
+  , createDir, logMessage
   )
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
@@ -358,46 +359,27 @@ buildPlan verbosity comp
           userUnitArgs
           cabalPlan
   = do
-    dirs@( Dirs { installDir, prefix, destDir } )
-      <- canonicalizeDirs destDir0
-    createDirectoryIfMissing True installDir
+    dirs <- canonicalizeDirs destDir0
 
-    -- Create the package database directories (if they don't already exist).
+    -- Create the temporary package database, if it doesn't already exist.
+    -- We also create the final installation package database,
+    -- but this happens later, in (*), as part of the build script itself.
+    --
     -- See Note [Using two package databases] in BuildOne.
-    let
-      PkgDbDirsCan { tempPkgDbDir, finalPkgDbDir } = getPkgDbDirsCan dirs
+    let PkgDbDirsCan { tempPkgDbDir } = getPkgDbDirsCan dirs
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
     when tempPkgDbExists $
      removeDirectoryRecursive tempPkgDbDir
        `catch` \ ( _ :: IOException ) -> return ()
-    mapM_ (createDirectoryIfMissing True)
-      [ tempPkgDbDir, finalPkgDbDir ]
-
-    normalMsg verbosity $ "\nPreparing packages for build"
-    verboseMsg verbosity $
-      Text.unlines [ "Directory structure:"
-                   , "      prefix: " <> Text.pack prefix
-                   , "     destDir: " <> Text.pack destDir
-                   , "  installDir: " <> Text.pack installDir ]
-    debugMsg verbosity $ "Packages:\n" <>
-      Text.unlines
-        [ "  - " <> pkgNameVersion nm ver
-        | (nm, ver) <- Map.keys pkgMap ]
-    debugMsg verbosity $ "Units:\n" <>
-      Text.unlines
-        [ "  - " <> pkgNm <> ":" <> cabalComponent compName
-        | ( ConfiguredUnit
-            { puPkgName = PkgName pkgNm
-            , puComponentName = compName }
-          , _ ) <- unitsToBuild
-        ]
+    createDirectoryIfMissing True tempPkgDbDir
 
     let useVars :: Bool
         useVars = case buildStrat of
                     Script { useVariables } -> useVariables
                     _                       -> False
         outDirs :: Dirs ForOutput
-        outDirs = dirsForOutput useVars dirs
+        outDirs@( Dirs { prefix, destDir, installDir } )
+          = dirsForOutput useVars dirs
         compForOutput :: Compiler
         compForOutput
           | useVars
@@ -405,15 +387,46 @@ buildPlan verbosity comp
           | otherwise
           = comp
 
-    pkgDbDirsOut <- getPkgDbDirsOut outDirs
+    pkgDbDirsOut@( PkgDbDirsOut { finalPkgDbDir } )
+      <- getPkgDbDirsOut outDirs
 
-    let unitSetupScript :: ConfiguredUnit -> IO BuildScript
+    verboseMsg verbosity $
+      Text.unlines [ "Directory structure:"
+                   , "      prefix: " <> Text.pack prefix
+                   , "     destDir: " <> Text.pack destDir
+                   , "  installDir: " <> Text.pack installDir ]
+
+    let -- Initial preparation: logging, and creating the final
+        -- package database.
+        preparation :: BuildScript
+        preparation = do
+          logMessage verbosity Verbose $
+            "Creating final package database at " <> finalPkgDbDir
+          createDir finalPkgDbDir -- (*)
+          logMessage verbosity Debug $ "Packages:\n" <>
+            unlines
+              [ "  - " <> Text.unpack (pkgNameVersion nm ver)
+              | (nm, ver) <- Map.keys pkgMap ]
+          logMessage verbosity Debug $ "Units:\n" <>
+            unlines
+              [ "  - " <> Text.unpack pkgNm <> ":" <> Text.unpack (cabalComponent compName)
+              | ( ConfiguredUnit
+                  { puPkgName = PkgName pkgNm
+                  , puComponentName = compName }
+                , _ ) <- unitsToBuild
+              ]
+          logMessage verbosity Normal $ "=== BUILD START ==="
+
+        -- Setup the package for this unit.
+        unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
           let pkgDirCan = getPkgDir workDir dirs    pu
               pkgDirOut = getPkgDir workDir outDirs pu
           setupPackage verbosity compForOutput
             pkgDbDirsOut pkgDirCan pkgDirOut
             puSetupDepends
+
+        -- Build and install this unit.
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
           let pkgDir = getPkgDir workDir outDirs pu
@@ -422,13 +435,18 @@ buildPlan verbosity comp
                 (userUnitArgs pu)
                 depMap pu
 
+        -- Close out the build.
+        finish :: BuildScript
+        finish = do
+          logMessage verbosity Normal $ "=== BUILD SUCCEEDED ==="
+
     case buildStrat of
       Async n -> do
         let j :: Text
             j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
         normalMsg verbosity $
           "\nBuilding and installing units asynchronously with " <> j
-
+        executeBuildScript preparation
         AbstractQSem { withAbstractQSem } <- qsem n
         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
@@ -470,14 +488,17 @@ buildPlan verbosity comp
           finalUnitAsyncs <- for unitMap (async . doUnitAsync)
           return (finalPkgAsyncs, finalUnitAsyncs)
         mapM_ wait unitAsyncs
+        executeBuildScript finish
 
       TopoSort -> do
         normalMsg verbosity "\nBuilding and installing units sequentially.\n\
                             \NB: pass -j<N> for increased parallelism."
+        executeBuildScript preparation
         for_ unitsToBuild \ ( cu, didSetup ) -> do
           when (isNothing didSetup) $
             unitSetupScript cu >>= executeBuildScript
           executeBuildScript (unitBuildScript cu)
+        executeBuildScript finish
 
       Script { scriptPath = fp, useVariables } -> do
         let scriptConfig :: ScriptConfig
@@ -492,7 +513,8 @@ buildPlan verbosity comp
                      else return emptyBuildScript
           let build = unitBuildScript cu
           return $ mbSetup <> build
-        Text.writeFile fp $ script scriptConfig $ mconcat buildScripts
+        Text.writeFile fp $ script scriptConfig $
+          preparation <> mconcat buildScripts <> finish
 
   where
 

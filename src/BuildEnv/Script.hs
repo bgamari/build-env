@@ -21,7 +21,8 @@ module BuildEnv.Script
 
     -- ** Individual build steps
   , BuildStep(..), BuildSteps
-  , step, callProcess, logMessage
+  , step
+  , callProcess, createDir, logMessage
 
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
@@ -44,6 +45,10 @@ import Data.Monoid
   ( Ap(..) )
 import Data.String
   ( IsString(..) )
+
+-- directory
+import System.Directory
+  ( createDirectoryIfMissing )
 
 -- text
 import Data.Text
@@ -104,6 +109,8 @@ type BuildSteps = [BuildStep]
 data BuildStep
   -- | Call a processs with the given arguments.
   = CallProcess CallProcess
+  -- | Create the given directory.
+  | CreateDir FilePath
   -- | Log a message.
   | LogMessage String
 
@@ -114,6 +121,10 @@ step s = BuildScript $ ReaderT \ _ -> tell [s]
 -- | Call a process with given arguments.
 callProcess :: CallProcess -> BuildScript
 callProcess = step . CallProcess
+
+-- | Create the given directory.
+createDir :: FilePath -> BuildScript
+createDir = step . CreateDir
 
 -- | Log a message.
 logMessage :: Verbosity -> Verbosity -> String -> BuildScript
@@ -210,6 +221,7 @@ executeBuildScript =
 -- | Execute a single 'BuildStep' in the 'IO' monad.
 executeBuildStep :: BuildStep -> IO ()
 executeBuildStep (CallProcess cp ) = callProcessInIO cp
+executeBuildStep (CreateDir   dir) = createDirectoryIfMissing True dir
 executeBuildStep (LogMessage  msg) = putStrLn msg
 
 ----------------
@@ -277,5 +289,7 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
                       <> Text.pack var
                       <> "=" <> Text.pack val <> " ; \\"
                                  -- (already quoted)
+stepScript (CreateDir dir) =
+  [ "mkdir -p " <> q dir ]
 stepScript (LogMessage str) =
   [ "echo " <> q str ]
