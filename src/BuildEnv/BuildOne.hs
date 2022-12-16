@@ -139,8 +139,8 @@ buildUnit :: Verbosity
           -> Compiler
           -> PkgDbDirs -- ^ package database directories (see 'getPkgDbDirs')
           -> PkgDir    -- ^ package directory (see 'getPkgDir')
-          -> DestDir Canonicalised
-               -- ^ installation directory structure
+          -> Dirs Canonicalised
+                      -- ^ directory structure
           -> UnitArgs -- ^ extra arguments for this unit
           -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
           -> ConfiguredUnit -- ^ the unit to build
@@ -150,7 +150,7 @@ buildUnit verbosity
           ( PkgDbDirs { tempPkgDbDir, finalPkgDbDir
                       , tempPkgDbSem, finalPkgDbSem } )
           ( PkgDir { pkgNameVer, pkgDir } )
-          ( DestDir { installDir, prefix, destDir } )
+          ( Dirs { installDir, prefix, destDir } )
           ( UnitArgs { configureArgs = userConfigureArgs
                      , mbHaddockArgs = mbUserHaddockArgs
                      , registerArgs  = userGhcPkgArgs } )

@@ -73,7 +73,7 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( canonicalizePath, createDirectoryIfMissing
+  ( createDirectoryIfMissing
   , doesDirectoryExist, removeDirectoryRecursive
   )
 
@@ -343,21 +343,20 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- registered in the package database.
 buildPlan :: Verbosity
           -> Compiler
-          -> FilePath    -- ^ fetched sources directory (input)
-          -> DestDir Raw -- ^ installation directory structure (output)
+          -> Dirs Raw -- ^ directory structure
           -> BuildStrategy
           -> ( ConfiguredUnit -> UnitArgs )
              -- ^ extra arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
-buildPlan verbosity comp fetchDir0 destDir0
+buildPlan verbosity comp
+          destDir0
           buildStrat
           userUnitArgs
           cabalPlan
   = do
-    fetchDir <- canonicalizePath fetchDir0
-    dest@( DestDir { installDir, prefix, destDir } )
-      <- canonicalizeDestDir destDir0
+    dest@( Dirs { fetchDir, installDir, prefix, destDir } )
+      <- canonicalizeDirs destDir0
     createDirectoryIfMissing True installDir
 
     -- Create the package database directories (if they don't already exist).

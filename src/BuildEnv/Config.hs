@@ -21,9 +21,9 @@ module BuildEnv.Config
   , Compiler(..), Cabal(..)
 
     -- * Directory structure
-  , DestDir(..), PathType(..), InstallDir
+  , Dirs(..), PathType(..), InstallDir
   , PreserveDirs(..)
-  , canonicalizeDestDir
+  , canonicalizeDirs
 
     -- ** Handling of temporary directories
   , TempDirPermanence(..)
@@ -115,27 +115,33 @@ data Compiler =
 --------------------------------------------------------------------------------
 -- Directory structure
 
--- | The directory structure relevant to installation: @destdir@ and @prefix@.
+-- | The directory structure relevant to a build. These are:
 --
--- - If the type parameter is 'Raw', filepaths can be relative.
--- - If it is 'Canonicalised', the filepaths must be absolute.
---   (If outputting a shell script, they can be variables that expand
---    to absolute paths.)
+-- - the input fetched sources directory
+-- - the build output directory structure: @destdir@ and @prefix@,
+--   which determine @installdir@.
 --
--- See 'installDir'.
-type DestDir :: PathType -> Type
-data DestDir pathTy =
-  DestDir
-    { destDir     :: FilePath
-      -- ^ Build @destdir@.
+-- Meaning of the type parameter:
+--
+-- - 'Raw': filepaths can be relative.
+-- - 'Canonicalised': the filepaths must be absolute.
+--    If outputting a shell script, they can be variables that expand
+--    to absolute paths.
+type Dirs :: PathType -> Type
+data Dirs pathTy =
+  Dirs
+    { fetchDir    :: FilePath
+      -- ^ Input fetched sources directory (build input).
+    , destDir     :: FilePath
+      -- ^ Output build @destdir@.
     , prefix      :: FilePath
-      -- ^ The build @prefix@.
+      -- ^ Output build @prefix@.
     , installDir  :: InstallDir pathTy
-      -- ^ 'Raw': whether @destdir@ and @prefix@ should be canonicalised.
-      --   'Canonicalised': the installation directory @destdir/prefix@.
+      -- ^ - 'Raw' stage: whether @destdir@ and @prefix@ should be canonicalised.
+      --   - 'Canonicalised' stage: the output installation directory @destdir/prefix@.
     }
 
-deriving stock instance Show (InstallDir pathTy) => Show (DestDir pathTy)
+deriving stock instance Show (InstallDir pathTy) => Show (Dirs pathTy)
 
 data PathType = Raw | Canonicalised
 
@@ -150,22 +156,29 @@ type family InstallDir pathTy where
 -- | Whether to preserve the input @prefix@, and @destdir@ paths,
 -- or to canonicalise them (making them absolute).
 data PreserveDirs
-    -- | Canonicalise @prefix@ and @destdir@.
+    -- | Canonicalise fetched sources, @prefix@ and @destdir@ directories.
   = CanonicaliseDirs
-    -- | Preserve @prefix@ and @destdir@ as they were given,
-    -- setting @installdir=destdir/prefix@.
+    -- | Preserve fetched sources, @prefix@ and @destdir@ paths
+    -- as they were given, setting @installdir=destdir/prefix@.
   | PreserveDirs
   deriving stock Show
 
--- | Canonicalise a 'DestDir', computing the appropriate
+-- | Canonicalise 'Dirs', computing the appropriate
 -- installation directory @destdir/prefix@.
-canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
-canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0, installDir = preserveDirs } )
+canonicalizeDirs :: Dirs Raw -> IO (Dirs Canonicalised)
+canonicalizeDirs ( Dirs { fetchDir   = fetchDir0
+                        , destDir    = destDir0
+                        , prefix     = prefix0
+                        , installDir = preserveDirs } )
   = case preserveDirs of
     PreserveDirs -> do
       let installDir = destDir0 <> "/" <> prefix0
-      return $ DestDir { destDir = destDir0, prefix = prefix0, installDir }
+      return $ Dirs { fetchDir = fetchDir0
+                    , destDir  = destDir0
+                    , prefix   = prefix0
+                    , installDir }
     CanonicaliseDirs -> do
+      fetchDir   <- canonicalizePath fetchDir0
       prefix     <- canonicalizePath prefix0
       destDir    <- canonicalizePath destDir0
       installDir <- canonicalizePath ( destDir0 </> dropDrive prefix )
@@ -175,7 +188,7 @@ canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0, installDir
         --   then (</>) returns the second path.
         --
         -- We don't want that, as we *do* want to concatenate both paths.
-      return $ DestDir { destDir, prefix, installDir }
+      return $ Dirs { fetchDir, destDir, prefix, installDir }
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence
