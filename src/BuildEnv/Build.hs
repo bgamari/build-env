@@ -462,7 +462,7 @@ buildPlan verbosity comp fetchDir0 destDir0
       Script fp -> do
         let scriptConfig :: ScriptConfig
             scriptConfig =
-              ScriptConfig { quoteArgs = True, scriptStyle = hostStyle }
+              ScriptConfig { outputShell = True, scriptStyle = hostStyle }
 
         normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
         buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do

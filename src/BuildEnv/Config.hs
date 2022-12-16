@@ -34,7 +34,7 @@ module BuildEnv.Config
 
     -- * OS specifics
   , Style(..), hostStyle
-  , runCwdExe, pATHSeparator
+  , pATHSeparator
 
   ) where
 
@@ -52,7 +52,7 @@ import System.Directory
 
 -- filepath
 import System.FilePath
-  ( (</>), (<.>), dropDrive )
+  ( (</>), dropDrive )
 
 -- text
 import Data.Text
@@ -212,11 +212,6 @@ cabalVerbosity (Verbosity _) = "-v3"
 data Style
   = PosixStyle
   | WinStyle
-
--- | Command to run an executable in the current working directory.
-runCwdExe :: Style -> FilePath -> FilePath
-runCwdExe PosixStyle exe = "./" <> exe
-runCwdExe WinStyle   exe = exe <.> "exe"
 
 -- | OS-dependent separator for the PATH environment variable.
 pATHSeparator :: Style -> String
