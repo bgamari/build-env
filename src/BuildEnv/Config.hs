@@ -22,6 +22,7 @@ module BuildEnv.Config
 
     -- * Directory structure
   , DestDir(..), PathType(..), InstallDir
+  , PreserveDirs(..)
   , canonicalizeDestDir
 
     -- ** Handling of temporary directories
@@ -114,10 +115,12 @@ data Compiler =
 --------------------------------------------------------------------------------
 -- Directory structure
 
--- | The directory structure relevant to installation: @dest-dir@ and @prefix@.
+-- | The directory structure relevant to installation: @destdir@ and @prefix@.
 --
--- If the type parameter is 'Raw', filepaths can be relative.
--- If it is 'Canonicalised', the filepaths must be absolute.
+-- - If the type parameter is 'Raw', filepaths can be relative.
+-- - If it is 'Canonicalised', the filepaths must be absolute.
+--   (If outputting a shell script, they can be variables that expand
+--    to absolute paths.)
 --
 -- See 'installDir'.
 type DestDir :: PathType -> Type
@@ -128,7 +131,8 @@ data DestDir pathTy =
     , prefix      :: FilePath
       -- ^ The build @prefix@.
     , installDir  :: InstallDir pathTy
-      -- ^ The installation directory @dest-dir/prefix@.
+      -- ^ 'Raw': whether @destdir@ and @prefix@ should be canonicalised.
+      --   'Canonicalised': the installation directory @destdir/prefix@.
     }
 
 deriving stock instance Show (InstallDir pathTy) => Show (DestDir pathTy)
@@ -137,26 +141,41 @@ data PathType = Raw | Canonicalised
 
 -- | We need to canonicalise paths before computing an installation directory.
 --
--- This type family keeps track of whether we have done so or not.
+-- This type family keeps track of this canonicalisation step.
 type InstallDir :: PathType -> Type
 type family InstallDir pathTy where
-  InstallDir Raw           = ()
+  InstallDir Raw           = PreserveDirs
   InstallDir Canonicalised = FilePath
 
+-- | Whether to preserve the input @prefix@, and @destdir@ paths,
+-- or to canonicalise them (making them absolute).
+data PreserveDirs
+    -- | Canonicalise @prefix@ and @destdir@.
+  = CanonicaliseDirs
+    -- | Preserve @prefix@ and @destdir@ as they were given,
+    -- setting @installdir=destdir/prefix@.
+  | PreserveDirs
+  deriving stock Show
+
 -- | Canonicalise a 'DestDir', computing the appropriate
--- installation directory @dest-dir/prefix@.
+-- installation directory @destdir/prefix@.
 canonicalizeDestDir :: DestDir Raw -> IO (DestDir Canonicalised)
-canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0 } ) = do
-  prefix     <- canonicalizePath prefix0
-  destDir    <- canonicalizePath destDir0
-  installDir <- canonicalizePath ( destDir0 </> dropDrive prefix )
-    -- We must use dropDrive here. Quoting from the documentation of (</>):
-    --
-    --   If the second path starts with a path separator or a drive letter,
-    --   then (</>) returns the second path.
-    --
-    -- We don't want that, as we *do* want to concatenate both paths.
-  return $ DestDir { destDir, prefix, installDir }
+canonicalizeDestDir ( DestDir { destDir = destDir0, prefix = prefix0, installDir = preserveDirs } )
+  = case preserveDirs of
+    PreserveDirs -> do
+      let installDir = destDir0 <> "/" <> prefix0
+      return $ DestDir { destDir = destDir0, prefix = prefix0, installDir }
+    CanonicaliseDirs -> do
+      prefix     <- canonicalizePath prefix0
+      destDir    <- canonicalizePath destDir0
+      installDir <- canonicalizePath ( destDir0 </> dropDrive prefix )
+        -- We must use dropDrive here. Quoting from the documentation of (</>):
+        --
+        --   If the second path starts with a path separator or a drive letter,
+        --   then (</>) returns the second path.
+        --
+        -- We don't want that, as we *do* want to concatenate both paths.
+      return $ DestDir { destDir, prefix, installDir }
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence

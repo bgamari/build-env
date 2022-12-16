@@ -100,6 +100,11 @@ __does not__ insert additional quotation marks around `$myArgs`, which allows
 passing multiple arguments at once (this is crucial when one doesn't know
 the number of arguments ahead of time).
 
+If you want to set `--prefix` or `--destdir` to variables, you will want to
+pass the `--preserve-dirs` flag, which will skip the step that attempts to make
+these paths absolute. In that case, the variables should expand to absolute
+paths, as is usually required for `prefix` and `destdir`.
+
 ## Specifying packages
 
 Instead of passing the required packages through the command line,

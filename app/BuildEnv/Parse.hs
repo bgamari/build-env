@@ -380,14 +380,18 @@ build = do
                    <> help "Installation prefix"
                    <> metavar "OUTDIR" )
       destDir <-
-        option str (  long "dest-dir"
+        option str (  long "destdir"
                    <> help "Installation destination directory"
                    <> value "/"
                    <> metavar "OUTDIR" )
+      preserveDirs <-
+        flag CanonicaliseDirs PreserveDirs
+          (  long "preserve-dirs"
+          <> help "Preserve prefix and destdir instead of canonicalising" )
       return $
         DestDir
           { destDir, prefix
-          , installDir = () -- computed after path canonicalisation
+          , installDir = preserveDirs
           }
 
     -- TODO: we only support passing arguments for all units at once,
