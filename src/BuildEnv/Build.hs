@@ -88,7 +88,7 @@ import Data.Text
   ( Text )
 import qualified Data.Text    as Text
 import qualified Data.Text.IO as Text
-  ( appendFile, writeFile )
+  ( writeFile )
 
 -- build-env
 import BuildEnv.BuildOne
@@ -471,7 +471,7 @@ buildPlan verbosity comp fetchDir0 destDir0
                      else return emptyBuildScript
           let build = unitBuildScript cu
           return $ mbSetup <> build
-        Text.appendFile fp $ script scriptConfig $ mconcat buildScripts
+        Text.writeFile fp $ script scriptConfig $ mconcat buildScripts
 
   where
 
