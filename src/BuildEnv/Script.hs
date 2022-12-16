@@ -261,12 +261,13 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
       = []
       | otherwise
       = [  "  export PATH=$PATH:"
-        <> Text.intercalate ":" (map q extraPATH)
+        <> Text.intercalate ":" (map Text.pack extraPATH) -- (already quoted)
         <> " ; \\" ]
 
     mkEnvVar :: (String, String) -> Text
     mkEnvVar (var,val) = "  export "
                       <> Text.pack var
-                      <> "=" <> q val <> " ; \\"
+                      <> "=" <> Text.pack val <> " ; \\"
+                                 -- (already quoted)
 stepScript (LogMessage str) =
   [ "echo " <> q str ]

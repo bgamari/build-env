@@ -195,9 +195,9 @@ buildUnit verbosity
                           , "--builddir=" ++ buildDir
                           , setupVerbosity verbosity
                           ] ++ flagsArg
-                            ++ userConfigureArgs
                             ++ map ( dependencyArg plan unit )
                                 ( Configured.puDepends unit )
+                            ++ userConfigureArgs
                           ++ [ buildTarget unit ]
           setupExe = runCwdExe scriptCfg "Setup"
       logMessage verbosity Verbose $
