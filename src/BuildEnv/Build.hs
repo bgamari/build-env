@@ -399,7 +399,7 @@ buildPlan verbosity comp
         compForOutput :: Compiler
         compForOutput
           | useVars
-          = Compiler { ghcPath = "$GHC", ghcPkgPath = "$GHCPKG" }
+          = Compiler { ghcPath = "${GHC}", ghcPkgPath = "${GHCPKG}" }
           | otherwise
           = comp
 

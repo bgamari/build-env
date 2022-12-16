@@ -192,10 +192,10 @@ dirsForOutput :: Bool -- ^ use variables?
               -> Dirs ForOutput
 dirsForOutput useVars ( Dirs { fetchDir, destDir, prefix, installDir })
   | useVars
-  = Dirs { fetchDir   = "$SOURCES"
-         , prefix     = "$PREFIX"
-         , destDir    = "$DESTDIR"
-         , installDir = "$DESTDIR" </> "$PREFIX" }
+  = Dirs { fetchDir   = "${SOURCES}"
+         , prefix     = "${PREFIX}"
+         , destDir    = "${DESTDIR}"
+         , installDir = "${DESTDIR}" </> "${PREFIX}" }
   | otherwise
   = Dirs { fetchDir, destDir, prefix, installDir }
 
