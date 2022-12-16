@@ -111,8 +111,9 @@ callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) =
         let argsStr
              | null args = ""
              | otherwise = " " ++ unwords args
-        error ("command failed with exit code " ++ show i ++ ":\n"
-              ++ "  > " ++ prog ++ argsStr )
+        error ( "command failed with exit code " ++ show i ++ ":\n"
+              ++ "  > " ++ prog ++ argsStr ++ "\n"
+              ++ "PWD = " ++ cwd )
 
 -- | Add filepaths to the given key in a key/value environment.
 augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String
