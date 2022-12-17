@@ -62,7 +62,7 @@ import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Script
 import BuildEnv.Utils
-  ( CallProcess(..)
+  ( ProgPath(..), CallProcess(..)
   , withQSem, noSem
   )
 
@@ -100,7 +100,7 @@ setupPackage verbosity
            "Compiling Setup.hs for " <> pkgNameVer
          callProcess $
            CP { cwd          = "."
-              , prog         = ghcPath
+              , prog         = AbsPath ghcPath
               , args         = setupArgs
               , extraPATH    = []
               , extraEnvVars = []
@@ -201,7 +201,7 @@ buildUnit verbosity
                                 ( Configured.puDepends unit )
                             ++ userConfigureArgs
                           ++ [ buildTarget unit ]
-          setupExe = runCwdExe scriptCfg "Setup"
+          setupExe = RelPath $ runCwdExe scriptCfg "Setup" -- relative to pkgDir
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
@@ -310,7 +310,7 @@ buildUnit verbosity
             -- ghc-pkg register
             callProcess $
               CP { cwd          = pkgDir
-                 , prog         = ghcPkgPath
+                 , prog         = AbsPath ghcPkgPath
                  , args         = [ "register"
                                   , ghcPkgVerbosity verbosity
                                   , "--package-db", quoteArg scriptCfg pkgDbDir
@@ -481,8 +481,7 @@ runCwdExe ( ScriptConfig { scriptOutput, scriptStyle } )
   = pre . ext
   where
     pre
-      | Run      <- scriptOutput
-      , WinStyle <- scriptStyle
+      | Run <- scriptOutput
       = id
       | otherwise
       = ( "./" <> )
