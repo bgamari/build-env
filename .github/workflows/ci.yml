@@ -31,27 +31,48 @@ jobs:
     - name: "Build executable"
       run: cabal build exe:build-env
 
-    - name: "Test 1: plan, fetch and build lens (command line)"
-      working-directory: ./tests/test1
+    - name: "Relocate and run a build script for 'free' (with local 'distributive')"
+      working-directory: ./tests/RelocatableScript
+      if: runner.os != 'Windows'
       run: |
-        cabal run exe:build-env -- plan lens -p plan.json -v2
+        mkdir -p localpkgs
+        ( cd localpkgs ; cabal get distributive-0.6.2.1 )
+        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources -o install --script build_free.sh --variables -v2
+        mkdir -p build
+        cp build_free.sh build/build_free.sh
+        cp -a sources   build/srcs
+        cp -a localpkgs build/localpkgs
+        cd build
+        export GHC=ghc
+        export GHCPKG=ghc-pkg
+        export SOURCES="$PWD"/srcs
+        export DESTDIR=/
+        export PREFIX="$PWD"/final
+        chmod +x build_free.sh
+        ./build_free.sh
+        ghc-pkg --package-db=final/package.conf field free id
+
+    - name: "Plan, fetch and build 'comonad' (command line)"
+      working-directory: ./tests/PlanFetchBuild
+      run: |
+        cabal run exe:build-env -- plan comonad -p plan.json -v2
         cabal run exe:build-env -- fetch -p plan.json -f sources -v2
         cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -j8 -v2
+        ghc-pkg --package-db=install/package.conf field comonad id
+
+    - name: "Build 'lens' (seed file & cabal.config)"
+      working-directory: ./tests/SEEDS
+      run: |
+        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -j8 -v2
         ghc-pkg --package-db=install/package.conf field lens id
 
-    - name: "Test 2: build aeson (seed file & cabal.config)"
-      working-directory: ./tests/test2
-      run: |
-        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -v2
-        ghc-pkg --package-db=install/package.conf field aeson id
-
-    - name: "Test 3: build c2hs executable (command line)"
-      working-directory: ./tests/test3
+    - name: "Build 'c2hs' executable (command line)"
+      working-directory: ./tests/ExeDeps
       run: |
         cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2
 
-    - name: "Test 4: generate a build script for attoparsec and run it"
-      working-directory: ./tests/test4
+    - name: "Generate a build script for 'attoparsec' and run it"
+      working-directory: ./tests/Script
       if: runner.os != 'Windows'
       run: |
         cabal run exe:build-env -- build attoparsec -f sources -o install --script build_atto.sh -v2
@@ -59,12 +80,12 @@ jobs:
         ./build_atto.sh
         ghc-pkg --package-db=install/package.conf field attoparsec id
 
-    - name: "Test 5: bootstrap build-env"
-      working-directory: ./tests/test5
-      run: |
-        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local build-env=../..
-
-    - name: "Test 6: package with multiple libraries"
-      working-directory: ./tests/test6
+    - name: "Test building packages with multiple public libraries"
+      working-directory: ./tests/MultipleLibs
       run: |
         cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local pkg1=pkg1 --local pkg2=pkg2 -j8
+
+    - name: "Bootstrap 'build-env'"
+      working-directory: ./tests/Bootstrap
+      run: |
+        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local build-env=../.. -j8

@@ -1,0 +1,4 @@
+build/
+sources/
+localpkgs/
+*.json

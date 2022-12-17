@@ -1,0 +1,11 @@
+install/
+fetch/
+*.json
+pkg1/dist/
+pkg2/dist/
+pkg1/Setup.hs
+pkg2/Setup.hs
+*.hi
+*.o
+*.exe
+*.conf

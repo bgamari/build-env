@@ -140,7 +140,8 @@ the number of arguments ahead of time).
 If you want to set `--fetchdir`, `--prefix` or `--destdir` to variables,
 you should pass the `--variables` flag. This will set these to the values
 `$SOURCES`, `$PREFIX` and `$DESTDIR` in the output shell script, respectively.
-It will also use `$GHC` and `$GHCPKG` variables for the compiler.
+These should be set to absolute paths before running the script.  
+The script will also use `$GHC` and `$GHCPKG` variables for the compiler.  
 
 ## Specifying packages
 
