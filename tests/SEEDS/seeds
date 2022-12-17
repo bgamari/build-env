@@ -1,5 +1,5 @@
 
-aeson
+lens
 
 allow-newer: *:base, *:template-haskell, time:Win32
 

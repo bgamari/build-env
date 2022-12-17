@@ -1,3 +1,4 @@
 install/
 sources/
 *.json
+*.sh
