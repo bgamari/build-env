@@ -22,7 +22,7 @@ import Data.Word
 import qualified Data.Map.Strict as Map
   ( empty, fromList, singleton )
 import qualified Data.Set as Set
-  ( empty, fromList, singleton )
+  ( fromList, singleton )
 
 -- optparse-applicative
 import Options.Applicative
@@ -43,10 +43,18 @@ import BuildEnv.Options
 -- | Run the command-line options parser.
 runOptionsParser :: FilePath -> IO Opts
 runOptionsParser currWorkDir =
-  customExecParser ( prefs showHelpOnEmpty ) $
+  customExecParser ( prefs config ) $
     info ( helper <*> options currWorkDir )
       (  fullDesc
-      <> header "build-env - compute, fetch and build cabal build plans" )
+      <> header "build-env - compute, fetch and build Cabal build plans" )
+
+  where
+    config =
+      mconcat [ showHelpOnEmpty
+              , subparserInline
+              , helpShowGlobals
+              , multiSuffix "*"
+              , columns 90 ]
 
 -- | The command-line options parser for the 'build-env' executable.
 options :: FilePath -> Parser Opts
@@ -165,8 +173,8 @@ modeDescription modeDesc =
 planInputs :: ModeDescription -> Parser PlanInputs
 planInputs modeDesc = do
 
-  planUnits <- dependencies modeDesc
   planPins <- optional (freeze modeDesc)
+  planUnits <- dependencies modeDesc
   planAllowNewer <- allowNewer
 
   return $ PlanInputs { planPins, planUnits, planAllowNewer }
@@ -184,10 +192,10 @@ freeze modeDesc = FromFile <$> freezeFile
 -- | Parse @allow-newer@ options.
 allowNewer :: Parser AllowNewer
 allowNewer =
-  option readAllowNewer
-    (  long "allow-newer" <> help "Allow-newer specification"
-    <> value (AllowNewer Set.empty)
-    <> metavar "PKG1:PKG2" )
+  fmap mconcat . many $
+    option readAllowNewer
+      (  long "allow-newer" <> help "Allow-newer specification"
+      <> metavar "PKG1:PKG2" )
   where
     readAllowNewer :: ReadM AllowNewer
     readAllowNewer = do
@@ -236,7 +244,7 @@ dependencies modeDesc
 
     explicitUnits :: Parser ( PackageData UnitSpecs )
     explicitUnits = do
-      units  <- some ( argument readUnitSpec (metavar "UNIT1 UNIT2 ..." <> help unitsHelp) )
+      units  <- some ( argument readUnitSpec (metavar "UNIT" <> help unitsHelp) )
       locals <- many localPkg
       return $ Explicit $
         foldl unionUnitSpecsCombining Map.empty units
@@ -274,7 +282,7 @@ dependencies modeDesc
             return $ Map.singleton pkgNm (Remote, spec, Set.singleton comp)
 
     unitsHelp, seedsHelp :: String
-    (unitsHelp, seedsHelp) = (what <> " seed units", what <> " seed file")
+    (unitsHelp, seedsHelp) = (what <> " seed unit", what <> " seed file")
       where
         what = modeDescription modeDesc
 
@@ -334,10 +342,10 @@ newOrExisting =
 build :: Parser Build
 build = do
 
-  buildFetch      <- optFetch
   buildBuildPlan  <- plan Building
-  buildStrategy   <- optStrategy
   buildDirs       <- optDirs
+  buildStrategy   <- optStrategy
+  buildFetch      <- optFetch
   userUnitArgs    <- optUnitArgs
 
   return $ Build { buildFetch
@@ -368,7 +376,7 @@ build = do
       useVariables <-
         switch
           (  long "variables"
-          <> help "Use variables in the shell script output" )
+          <> help "Use variables in the shell script output ($PREFIX etc)" )
       return $ Script { scriptPath, useVariables }
 
     optFetch :: Parser Fetch
