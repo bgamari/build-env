@@ -114,7 +114,7 @@ executable build-env
 
     build-depends:
         optparse-applicative
-          >= 0.15 && < 0.18
+          >= 0.16 && < 0.18
       , build-env
 
     other-modules:
