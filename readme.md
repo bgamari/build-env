@@ -3,13 +3,29 @@
 **`build-env`** is a utility to build a set of Cabal packages (computed
 by `cabal-install`'s solver) into a free-standing package database.
 
+This enables the compilation of Haskell packages (with their dependencies)
+in hermetic build environments.
+
+---
+
+### Contents
+
+- [Example](#example)
+- [Commands](#commands)
+- [Deferred builds](#deferred-builds)
+- [Bootstrapping](#bootstrapping)
+  - [Bootstrap arguments](#bootstrap-arguments)
+- [Specifying packages](#specifying-packages)
+  - [Local packages](#local-packages)
+
+---
+
 ## Example
 
 ```
 $ build-env build lens -f sources -o install -j8
 $ ghci -package-db install/package.conf/ -package lens
-GHCi, version 9.0.2: https://www.haskell.org/ghc/  :? for help
-λ> :ty Control.Lens.Lens
+ghci> :ty Control.Lens.Lens
 Control.Lens.Lens
   :: Control.Lens.Type.Lens s t a b
      -> Control.Lens.Reified.ReifiedLens s t a b
@@ -19,19 +35,40 @@ In this example, the `build-env build` invocation:
 
   - computes a build plan for `lens`,
   - fetches `lens` and its dependencies into the `sources` directory,
-  - configures, builds and registers all the libraries into the `install`
-    directory, with up to `8` units building concurrently.
+  - configures and builds all the packages, with up to `8` units building
+    concurrently, and registers the libraries into the package database at
+    `install/package.conf`.
 
-We can then tell `ghci` to use this package database.
+We then tell `ghci` to use this package database, making `lens` available.
+
+## Commands
+
+`build-env` has three distinct modes of operation:
+
+  - `plan` computes a build plan, outputting a `plan.json` Cabal plan.
+  - `fetch` fetches sources.
+  - `build` executes a build plan.
+
+Each command subsumes the functionality of the previous ones in the above list.
+In particular, in the previous example, the `build` command computed a build
+plan, fetched the sources, and built the plan. The same could have been achieved
+with three separate invocations:
+
+```
+$ build-env plan lens -p lens-plan.json
+$ build-env fetch -p lens-plan.json -f sources
+$ build-env build -p lens-plan.json -f sources -o install -j8
+```
+
+Being able to separate these steps affords us some extra flexibility, as
+subsequent sections will explain.
 
 ## Deferred builds
 
-In some situations (e.g. in hermetic build environments), we might need to
-compute a build plan and fetch all the dependencies first, before doing
-an offline build.
+When working in a hermetic build environment, we might need to compute a build
+plan and fetch all the dependencies first, before doing an offline build.
 
-This can be achieved with `build-env` with the following two separate
-invocations.
+This can be achieved by two separate `build-env` invocations.
 
 In a local environment (with access to internet):
 
@@ -90,7 +127,7 @@ $ build-env fetch lens -f sources --output-plan myPlan.json
 Next, compute a build script containing references to variables:
 
 ```
-$ build-env build -p myPlan.json -f sources -o install --prefetched --configure-arg $myArgs --script script.sh
+$ build-env build -p myPlan.json -f sources -o install --prefetched --configure-arg \$\{myArgs\} --script script.sh
 ```
 
 This will output a script which passes `$myArgs` to each `Setup configure`
@@ -150,3 +187,19 @@ constraints: pkg1 == 0.1,
 
 Only the constraints are processed; everything else from the `cabal.config`
 file is ignored.
+
+### Local packages
+
+To specify that a package should be found locally rather than fetched from
+Hackage, use `--local`:
+
+```
+build-env build myPkg --local myPkg=../pkgs/myPkg
+```
+
+The part to the right of the `=` sign corresponds to what you would write
+in a `cabal.project` file: the directory in which `myPkg.cabal` is located.
+
+If this is a relative path, it will be interpreted relative to the working
+directory of the `build-env` invocation, which can be overriden by passing
+`--cwd <dir>` (works like the `-C` argument to `make`).
