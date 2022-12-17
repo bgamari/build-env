@@ -188,6 +188,9 @@ buildUnit verbosity
               | otherwise
               -> [ "--flags=" ++ quoteArg scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
           buildDir = "dist" </> thisUnitId
+            -- Set a different build directory for each unit,
+            -- to avoid clashes when building multiple units from the same
+            -- package concurrently.
           configureArgs = [ "--with-compiler", quoteArg scriptCfg ghcPath
                           , "--prefix", quoteArg scriptCfg prefix
                           , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
