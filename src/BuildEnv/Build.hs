@@ -105,7 +105,7 @@ import BuildEnv.Script
   , executeBuildScript, script
   )
 import BuildEnv.Utils
-  ( CallProcess(..), callProcessInIO, withTempDir
+  ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
   , AbstractQSem(..), qsem, noSem
   )
 
@@ -152,7 +152,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
       Text.unlines $ "cabal" : map ( ("  " <>) . Text.pack ) cabalBuildArgs
     callProcessInIO $
       CP { cwd          = dir
-         , prog         = cabalPath cabal
+         , prog         = AbsPath $ cabalPath cabal
          , args         = cabalBuildArgs
          , extraPATH    = []
          , extraEnvVars = []
@@ -327,7 +327,7 @@ cabalFetch verbosity cabal root pkgNmVer = do
                  , cabalVerbosity verbosity ]
     callProcessInIO $
       CP { cwd          = root
-         , prog         = cabalPath cabal
+         , prog         = AbsPath $ cabalPath cabal
          , args
          , extraPATH    = []
          , extraEnvVars = []

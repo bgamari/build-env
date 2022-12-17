@@ -62,7 +62,7 @@ import BuildEnv.Config
   , Style(..), hostStyle
   )
 import BuildEnv.Utils
-  ( CallProcess(..), callProcessInIO )
+  ( ProgPath(..), CallProcess(..), callProcessInIO )
 
 --------------------------------------------------------------------------------
 -- Build scripts: general monad setup.
@@ -243,16 +243,24 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     , "fi" ]
   where
     cmd :: Text
-    cmd = q prog <> " " <> Text.unwords (map Text.pack args)
-      -- Don't quote the arguments: arguments which needed quoting will have
-      -- been quoted using the 'quoteArg' function.
+    cmd = q ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
+      --         (1)                                         (2)
       --
-      -- This allows users to pass multiple arguments using variables:
+      -- (1)
+      --   In shell scripts, we always change directory before running the
+      --   program. As the program path is either absolute or relative to @cwd@,
+      --   we don't need to modify the program path.
       --
-      -- > myArgs="arg1 arg2 arg3"
-      -- > Setup configure $myArgs
+      -- (2)
+      --   Don't quote the arguments: arguments which needed quoting will have
+      --   been quoted using the 'quoteArg' function.
       --
-      -- by passing @$myArgs@ as a @Setup configure@ argument.
+      --   This allows users to pass multiple arguments using variables:
+      --
+      --   > myArgs="arg1 arg2 arg3"
+      --   > Setup configure $myArgs
+      --
+      --   by passing @$myArgs@ as a @Setup configure@ argument.
     resVar :: Text
     resVar = "lastExitCode"
     mbUpdatePath :: [Text]

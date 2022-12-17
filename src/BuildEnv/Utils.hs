@@ -1,4 +1,7 @@
+{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Module      :  BuildEnv.Utils
@@ -9,7 +12,7 @@
 -- See 'callProcessInIO'.
 module BuildEnv.Utils
     ( -- * Call a process in a given environment
-      CallProcess(..), callProcessInIO
+      ProgPath(..), CallProcess(..), callProcessInIO
 
       -- * Create temporary directories
     , TempDirPermanence(..), withTempDir
@@ -41,7 +44,11 @@ import qualified Data.Map.Strict as Map
 
 -- directory
 import System.Directory
-  ( withCurrentDirectory )
+  ( makeAbsolute )
+
+-- filepath
+import System.FilePath
+  ( (</>) )
 
 -- process
 import qualified System.Process as Proc
@@ -61,26 +68,32 @@ import BuildEnv.Config
 
 --------------------------------------------------------------------------------
 
+-- | The path of a program to run.
+data ProgPath
+  -- | An absolute path, or an executable in @PATH@.
+  = AbsPath { progPath :: FilePath }
+  -- | A relative path. What it is relative to depends on context.
+  | RelPath { progPath :: FilePath }
+
 -- | Arguments to 'callProcess'.
 data CallProcess
   = CP
   { cwd          :: FilePath
-     -- ^ working directory
-     --
-     -- NB: this @cwd@ applies __before__ executing 'prog'.
-     -- This is different from the @cwd@ of 'System.Process.createProcess'.
+     -- ^ Working directory.
   , extraPATH    :: [FilePath]
-     -- ^ filepaths to add to PATH
+     -- ^ Absolute filepaths to add to PATH.
   , extraEnvVars :: [(String, String)]
-     -- ^ extra environment variables
-  , prog         :: FilePath
-     -- ^ executable
+     -- ^ Extra environment variables to add before running the command.
+  , prog         :: ProgPath
+     -- ^ The program to run.
+     --
+     -- If it's a relative path, it should be relative to the @cwd@ field.
   , args         :: Args
-     -- ^ arguments
+     -- ^ Arguments to the program.
   , sem          :: AbstractQSem
-     -- ^ lock to take when calling the process
+     -- ^ Lock to take when calling the process
      -- and waiting for it to return, to avoid
-     -- contention in concurrent situations
+     -- contention in concurrent situations.
   }
 
 -- | Run a command and wait for it to complete.
@@ -89,31 +102,43 @@ data CallProcess
 --
 -- See 'CallProcess' for a description of the options.
 callProcessInIO :: HasCallStack => CallProcess -> IO ()
-callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) =
-  withCurrentDirectory cwd do
-    env <-
-      if null extraPATH && null extraEnvVars
-      then return Nothing
-      else do env0 <- getEnvironment
-              let env1 = Map.fromList $ env0 ++ extraEnvVars
-                  env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
-              return $ Just env2
-    let processArgs =
-          ( Proc.proc prog args )
-            { Proc.cwd = Nothing -- CWD set from the outside
-            , Proc.env = env }
-    res <- withAbstractQSem sem do
-      (_, _, _, ph) <- Proc.createProcess processArgs
-      Proc.waitForProcess ph
-    case res of
-      ExitSuccess -> return ()
-      ExitFailure i -> do
-        let argsStr
-             | null args = ""
-             | otherwise = " " ++ unwords args
-        error ( "command failed with exit code " ++ show i ++ ":\n"
-              ++ "  > " ++ prog ++ argsStr ++ "\n"
-              ++ "PWD = " ++ cwd )
+callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
+  absProg <-
+    case prog of
+      AbsPath p -> return p
+      RelPath p -> makeAbsolute $ cwd </> p
+        -- Needs to be an absolute path, as per the @process@ documentation:
+        --
+        --   If cwd is provided, it is implementation-dependent whether
+        --   relative paths are resolved with respect to cwd or the current
+        --   working directory, so absolute paths should be used
+        --   to ensure portability.
+        --
+        -- We always want the program to be interpreted relative to the cwd
+        -- argument, so we prepend @cwd@ and then make it absolute.
+  env <-
+    if null extraPATH && null extraEnvVars
+    then return Nothing
+    else do env0 <- getEnvironment
+            let env1 = Map.fromList $ env0 ++ extraEnvVars
+                env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
+            return $ Just env2
+  let processArgs =
+        ( Proc.proc absProg args )
+          { Proc.cwd = if cwd == "." then Nothing else Just cwd
+          , Proc.env = env }
+  res <- withAbstractQSem sem do
+    (_, _, _, ph) <- Proc.createProcess processArgs
+    Proc.waitForProcess ph
+  case res of
+    ExitSuccess -> return ()
+    ExitFailure i -> do
+      let argsStr
+           | null args = ""
+           | otherwise = " " ++ unwords args
+      error ( "command failed with exit code " ++ show i ++ ":\n"
+            ++ "  > " ++ absProg ++ argsStr ++ "\n"
+            ++ "CWD = " ++ cwd )
 
 -- | Add filepaths to the given key in a key/value environment.
 augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String
