@@ -232,8 +232,14 @@ script :: ScriptConfig -> BuildScript -> Text
 script scriptCfg buildScript =
   Text.unlines ( header ++ concatMap stepScript ( buildSteps scriptCfg buildScript ) )
   where
-    header :: [ Text ]
-    header = [ "#!/bin/bash" , "" ]
+    header, varsHelper :: [ Text ]
+    header = [ "#!/bin/bash" , "" ] ++ varsHelper
+    varsHelper
+      | Shell { useVariables } <- scriptOutput scriptCfg
+      , useVariables
+      = variablesHelper
+      | otherwise
+      = []
 
 -- | The underlying script of a build step.
 stepScript :: BuildStep -> [ Text ]
@@ -293,3 +299,30 @@ stepScript (CreateDir dir) =
   [ "mkdir -p " <> q dir ]
 stepScript (LogMessage str) =
   [ "echo " <> q str ]
+
+----
+-- Helper to check that environment variables are set as expected.
+
+-- | All the environment variables that a shell script using variables
+-- expects to be set.
+allVars :: [ Text ]
+allVars = [ "GHC", "GHCPKG", "SOURCES", "PREFIX", "DESTDIR" ]
+
+-- | A preamble that checks the required environment variables are defined.
+variablesHelper :: [ Text ]
+variablesHelper =
+    [ "", "echo \"Checking that required environment variables are set.\"" ]
+    ++ concatMap variableHelper allVars
+    ++ [ "" ]
+
+-- | Check that the given environment variable is defined, giving an error
+-- message if it isn't (to avoid an error cascade).
+variableHelper :: Text -> [ Text ]
+variableHelper varName =
+  [ "if [ -z ${" <> varName <> "} ]"
+  , "then"
+  , "  echo \"Environment variable " <> varName <> " not set.\""
+  , "  echo \"When using --variables, the build script expects the following environment variables to be set:\""
+  , "  echo \"  " <> Text.intercalate ", " allVars <> ".\""
+  , "  exit 1"
+  , "fi" ]
