@@ -13,6 +13,7 @@
 module BuildEnv.Config
   ( -- * Build strategy
     BuildStrategy(..), RunStrategy(..)
+  , AsyncSem(..), semDescription
 
    -- * Passing arguments
   , Args, UnitArgs(..)
@@ -45,7 +46,7 @@ import Control.Monad
 import Data.Kind
   ( Type )
 import Data.Word
-  ( Word8 )
+  ( Word16 )
 
 -- directory
 import System.Directory
@@ -58,15 +59,17 @@ import System.FilePath
 -- text
 import Data.Text
   ( Text )
+import qualified Data.Text as Text
+  ( pack )
 import qualified Data.Text.IO as Text
   ( putStrLn )
 
 --------------------------------------------------------------------------------
 -- Build strategy
 
--- | Build strategy for 'buildPlan'.
+-- | Build strategy for 'BuildEnv.Build.buildPlan'.
 data BuildStrategy
-  -- | Execute the build plan right away, in 'IO'.
+  -- | Execute the build plan in-place.
   = Execute RunStrategy
   -- | Output a build script that can be run later.
   | Script
@@ -75,11 +78,9 @@ data BuildStrategy
     , useVariables :: !Bool
       -- ^ Should the output shell script use variables, or baked in paths?
       --
-      -- Variables are:
+      -- The shell script will use the following variables:
       --
-      --  - @GHC@ and @GHC-PKG@,
-      --  - fetched sources directory @SOURCES@,
-      --  - @PREFIX@ and @DESTDIR@.
+      -- - @GHC@, @GHCPKG@, @SOURCES@, @PREFIX@, @DESTDIR@.
     }
   deriving stock Show
 
@@ -90,8 +91,28 @@ data RunStrategy
   = TopoSort
   -- | Asynchronously build all the packages, with each package
   -- waiting on its dependencies.
-  | Async !Word8
+  | Async
+     AsyncSem
+       -- ^ The kind of semaphore to use to control concurrency.
   deriving stock Show
+
+-- | What kind of semaphore to use in 'BuildEnv.Build.buildPlan'?
+--
+-- NB: this datatype depends on whether the @jsem@ flag
+-- was enabled when building the @build-env@ package.
+data AsyncSem
+  -- | Don't use any semaphore (not recommended).
+  = NoSem
+  -- | Create a new 'Control.Concurrent.QSem.QSem' semaphore
+  -- with the given number of tokens.
+  | NewQSem !Word16
+  deriving stock Show
+
+-- | A description of the kind of semaphore we are using to control concurrency.
+semDescription :: AsyncSem -> Text
+semDescription = \case
+  NoSem     -> "no semaphore"
+  NewQSem i -> "-j" <> Text.pack (show i)
 
 --------------------------------------------------------------------------------
 -- Arguments
@@ -183,7 +204,7 @@ data PathUsability
   | ForBuild
 
 -- | Canonicalise raw 'Paths', computing the appropriate directory structure
--- for preparing a build and executing a build.
+-- for preparing and executing a build, respectively.
 canonicalizePaths :: Compiler
                   -> BuildStrategy
                   -> Paths Raw
@@ -284,7 +305,7 @@ pATHSeparator :: Style -> String
 pATHSeparator PosixStyle = ":"
 pATHSeparator WinStyle   = ";"
 
--- | The style for the OS the program is currently running on.
+-- | The style associated with the OS the program is currently running on.
 hostStyle :: Style
 hostStyle =
 #if defined(mingw32_HOST_OS)

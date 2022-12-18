@@ -14,8 +14,16 @@
 -- A 'BuildScript' can be turned into a shell script which can be executed
 -- later, using 'script'.
 module BuildEnv.Script
-  ( -- * Build scripts
-    BuildScript, BuildScriptM(..)
+  ( -- * Interpreting build scripts
+
+    -- ** Executing build scripts
+    executeBuildScript
+
+    -- ** Shell-script output
+  , script
+
+    -- * Build scripts
+  , BuildScript, BuildScriptM(..)
   , emptyBuildScript, askScriptConfig
   , buildSteps
 
@@ -26,15 +34,7 @@ module BuildEnv.Script
 
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
-  , quoteArg, q
-
-    -- * Interpreting build scripts
-
-    -- ** Executing build scripts
-  , executeBuildScript
-
-    -- ** Shell-script output
-  , script
+  , quoteArg
 
   ) where
 
@@ -80,7 +80,7 @@ deriving via Ap BuildScriptM ()
 deriving via Ap BuildScriptM ()
   instance Monoid BuildScript
 
--- | Build script monad: @'ReaderT' 'ScriptConfig' ('Writer' 'BuildSteps')@.
+-- | Build script monad.
 newtype BuildScriptM a =
   BuildScript
     { runBuildScript :: ReaderT ScriptConfig ( Writer BuildSteps ) a }
@@ -159,17 +159,13 @@ data ScriptOutput
 data ScriptConfig
   = ScriptConfig
   { scriptOutput :: !ScriptOutput
-    -- ^ Whether we are outputting a shell script.
+    -- ^ Whether we are outputting a shell script, so that we can know whether
+    -- we should:
     --
-    -- Used for the following decisions:
-    --
-    --  - to add quotes around command-line arguments,
-    --    to avoid an argument with spaces being interpreted
-    --    as multiple arguments,
-    --  - to unconditionally add @./@ to run an executable
-    --    in the current working directory.
+    --  - add quotes around command-line arguments?
+    --  - add @./@ to run an executable in the current working directory?
   , scriptStyle :: !Style
-    -- ^ Whether to use Posix or Windows style conventions.
+    -- ^ Whether to use Posix or Windows style conventions. See 'Style'.
   }
 
 -- | Configure a script to run on the host (in @IO@).

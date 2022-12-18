@@ -64,7 +64,7 @@ import qualified BuildEnv.CabalPlan as Configured
 import BuildEnv.Script
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..)
-  , withQSem, noSem
+  , abstractQSem, noSem
   )
 
 --------------------------------------------------------------------------------
@@ -78,7 +78,7 @@ setupPackage :: Verbosity
              -> PkgDbDirs ForBuild
              -> PkgDir    ForPrep
              -> PkgDir    ForBuild
-             -> [UnitId] -- ^ @UnitId@s of @setup-depends@
+             -> [UnitId] -- ^ @UnitId@s of the @setup-depends@ of this package.
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
@@ -141,30 +141,29 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- | Return build steps to to configure, build and and installing the unit,
 -- including registering it in the package database if it is a library.
 --
--- You can run the build script with 'runBuildScript', or you can
+-- You can run the build script with 'executeBuildScript', or you can
 -- turn it into a shell script with 'script'.
 --
 -- Note: executing the build script will fail if the unit has already been
 -- registered in the package database.
 buildUnit :: Verbosity
           -> Compiler
-          -> PkgDbDirs  ForBuild -- ^ package database directories (see 'getPkgDbDirs')
-          -> PkgDir     ForBuild -- ^ package directory (see 'getPkgDir')
-          -> BuildPaths ForBuild
-                      -- ^ directory structure
-          -> UnitArgs -- ^ extra arguments for this unit
-          -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
-          -> ConfiguredUnit -- ^ the unit to build
+          -> BuildPaths ForBuild -- ^ Overall Build directory structure.
+          -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
+          -> PkgDir     ForBuild -- ^ This package's directory (see 'getPkgDir').
+          -> UnitArgs            -- ^ Extra arguments for this unit.
+          -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
+          -> ConfiguredUnit      -- ^ The unit to build.
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
+          ( BuildPaths { installDir, prefix, destDir } )
           ( PkgDbDirsForBuild
             { tempPkgDbDir
             , finalPkgDbDir
             , tempPkgDbSem
             , finalPkgDbSem } )
           ( PkgDir { pkgDir, pkgNameVer } )
-          ( BuildPaths { installDir, prefix, destDir } )
           ( UnitArgs { configureArgs = userConfigureArgs
                      , mbHaddockArgs = mbUserHaddockArgs
                      , registerArgs  = userGhcPkgArgs } )
@@ -321,7 +320,7 @@ buildUnit verbosity
                                   ++ extraPkgArgs
                  , extraPATH    = []
                  , extraEnvVars = []
-                 , sem          = withQSem pkgDbSem
+                 , sem          = abstractQSem pkgDbSem
                    -- Take a lock to avoid contention on the package database
                    -- when building units concurrently.
                  }
@@ -404,17 +403,17 @@ data family PkgDbDirs use
 data instance PkgDbDirs ForPrep
   = PkgDbDirsForPrep
     { tempPkgDbDir  :: !FilePath
-        -- ^ Local package database directory
+        -- ^ Local package database directory.
     }
 data instance PkgDbDirs ForBuild
   = PkgDbDirsForBuild
     { tempPkgDbDir  :: !FilePath
-        -- ^ Local package database directory
+        -- ^ Local package database directory.
     , tempPkgDbSem  :: !QSem
         -- ^ Semaphore controlling access to the temporary
         -- package database.
     , finalPkgDbDir :: !FilePath
-        -- ^ Installation package database directory
+        -- ^ Installation package database directory.
     , finalPkgDbSem :: !QSem
         -- ^ Semaphore controlling access to the installation
         -- package database.
@@ -448,19 +447,22 @@ type PkgDir :: PathUsability -> Type
 data PkgDir use
   = PkgDir
     { pkgNameVer :: !String
-        -- ^ Package @name-version@ string
+        -- ^ Package @name-version@ string.
     , pkgDir     :: !FilePath
-        -- ^ Package directory
+        -- ^ Package directory.
     }
 type role PkgDir representational
   -- Don't allow accidentally passing a @PkgDir ForPrep@ where one expects
   -- a @PkgDir ForBuild@.
 
--- | Compute some directory paths relevant to installation and registration
--- of a package.
-getPkgDir :: FilePath -- ^ working directory
+-- | Compute the package directory location. 
+getPkgDir :: FilePath
+              -- ^ Working directory
+              -- (used only to relativise paths to local packages).
           -> Paths use
-          -> ConfiguredUnit -- ^ any unit from the package in question
+              -- ^ Overall directory structure to base the computation off.
+          -> ConfiguredUnit
+              -- ^ Any unit from the package in question.
           -> PkgDir use
 getPkgDir workDir ( Paths { fetchDir } )
           ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } )

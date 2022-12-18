@@ -18,7 +18,8 @@ module BuildEnv.Utils
     , TempDirPermanence(..), withTempDir
 
       -- * Abstract semaphores
-    , AbstractQSem(..), qsem, withQSem, noSem
+    , AbstractSem(..)
+    , newAbstractSem, noSem, abstractQSem
 
     ) where
 
@@ -27,8 +28,6 @@ import Control.Concurrent.QSem
   ( QSem, newQSem, signalQSem, waitQSem )
 import Data.List
   ( intercalate )
-import Data.Word
-  ( Word8 )
 import System.Environment
   ( getEnvironment )
 import System.Exit
@@ -62,7 +61,8 @@ import System.IO.Temp
 
 -- build-env
 import BuildEnv.Config
-  ( Args, TempDirPermanence(..)
+  ( AsyncSem(..)
+  , Args, TempDirPermanence(..)
   , pATHSeparator, hostStyle
   )
 
@@ -90,7 +90,7 @@ data CallProcess
      -- If it's a relative path, it should be relative to the @cwd@ field.
   , args         :: !Args
      -- ^ Arguments to the program.
-  , sem          :: !AbstractQSem
+  , sem          :: !AbstractSem
      -- ^ Lock to take when calling the process
      -- and waiting for it to return, to avoid
      -- contention in concurrent situations.
@@ -127,7 +127,7 @@ callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
         ( Proc.proc absProg args )
           { Proc.cwd = if cwd == "." then Nothing else Just cwd
           , Proc.env = env }
-  res <- withAbstractQSem sem do
+  res <- withAbstractSem sem do
     (_, _, _, ph) <- Proc.createProcess processArgs
     Proc.waitForProcess ph
   case res of
@@ -167,27 +167,27 @@ withTempDir del name k =
 -- Semaphores.
 
 -- | Abstract acquire/release mechanism.
-newtype AbstractQSem =
-  AbstractQSem { withAbstractQSem :: forall r. IO r -> IO r }
+newtype AbstractSem =
+  AbstractSem { withAbstractSem :: forall r. IO r -> IO r }
 
--- | Create an acquire/release mechanism for the given number of tokens.
---
--- An input of @0@ means unrestricted (no semaphore at all).
-qsem :: Word8 -> IO AbstractQSem
-qsem 0 = return noSem
-qsem n = do
-  sem <- newQSem (fromIntegral n)
-  return $ withQSem sem
+-- | Create a semaphore-based acquire/release mechanism.
+newAbstractSem :: AsyncSem -> IO AbstractSem
+newAbstractSem whatSem =
+  case whatSem of
+    NoSem -> return noSem
+    NewQSem n -> do
+      qsem <- newQSem ( fromIntegral n )
+      return $ abstractQSem qsem
 
 -- | Abstract acquire/release mechanism controlled by the given 'QSem'.
-withQSem :: QSem -> AbstractQSem
-withQSem sem =
-  AbstractQSem \ mr -> do
+abstractQSem :: QSem -> AbstractSem
+abstractQSem sem =
+  AbstractSem \ mr -> do
     waitQSem sem
     r <- mr
     signalQSem sem
     return r
 
 -- | No acquire/release mechanism required.
-noSem :: AbstractQSem
-noSem = AbstractQSem { withAbstractQSem = id }
+noSem :: AbstractSem
+noSem = AbstractSem { withAbstractSem = id }

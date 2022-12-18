@@ -394,7 +394,7 @@ data ComponentName =
   ComponentName { componentType :: !ComponentType
                    -- ^ What's before the colon, e.g. @lib@, @exe@, @setup@...
                 , componentName :: !Text
-                   -- ^ The actual name of the component
+                   -- ^ The actual name of the component.
                 }
     deriving stock (Eq, Ord, Show)
 

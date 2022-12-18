@@ -107,7 +107,7 @@ import BuildEnv.Script
   )
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
-  , AbstractQSem(..), qsem, noSem
+  , AbstractSem(..), noSem, newAbstractSem
   )
 
 --------------------------------------------------------------------------------
@@ -125,12 +125,13 @@ dummyUnitId = UnitId $ dummyPackageName <> "-0-inplace"
 -- | Query @cabal@ to obtain a build plan for the given packages,
 -- by reading the output @plan.json@ of a @cabal build --dry-run@ invocation.
 --
--- Use 'generateCabalFilesContents' to generate the @cabal@ file contents
--- from a collection of packages with constraints and flags. See also
--- 'readCabalDotConfig' and 'parseSeedFile' for other ways of obtaining
--- this information.
+-- Use 'cabalFileContentsFromPackages' and 'cabalProjectContentsFromPackages'
+-- to generate the @cabal@ file contents from a collection of packages with
+-- constraints and flags.
+-- See also 'BuildEnv.File.parseCabalDotConfigPkgs' and
+-- 'BuildEnv.File.parseSeedFile' for other ways of obtaining this information.
 --
--- Use 'parsePlanBinary' to turn the returned 'CabalPlanBinary' into
+-- Use 'parsePlanBinary' to convert the returned 'CabalPlanBinary' into
 -- a 'CabalPlan'.
 computePlan :: TempDirPermanence
             -> Verbosity
@@ -226,8 +227,6 @@ cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) =
 
 -- | The contents of a dummy Cabal file with dependencies on
 -- the specified units (without any constraints).
---
--- The corresponding package Id is 'dummyPackageId'.
 cabalFileContentsFromPackages :: UnitSpecs -> Text
 cabalFileContentsFromPackages units =
   Text.unlines
@@ -287,12 +286,12 @@ data CabalFilesContents
 --------------------------------------------------------------------------------
 -- Fetching.
 
--- | Fetch the sources of a 'CabalPlan', calling @cabal unpack@ on each
+-- | Fetch the sources of a 'CabalPlan', calling @cabal get@ on each
 -- package and putting it into the correspondingly named and versioned
 -- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
 fetchPlan :: Verbosity
           -> Cabal
-          -> FilePath  -- ^ directory in which to put the sources
+          -> FilePath  -- ^ Directory in which to put the sources.
           -> CabalPlan
           -> IO ()
 fetchPlan verbosity cabal fetchDir cabalPlan =
@@ -344,16 +343,16 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- Note: this function will fail if one of the packages has already been
 -- registered in the package database.
 buildPlan :: Verbosity
-          -> FilePath -- ^ working directory
-                      -- (used only to make local packages relative)
+          -> FilePath
+              -- ^ Working directory
+              -- (used only to compute relative paths for local packages).
           -> Paths ForPrep
-              -- ^ paths to use to prepare the build
           -> Paths ForBuild
-              -- ^ paths to use to perform the build
           -> BuildStrategy
           -> ( ConfiguredUnit -> UnitArgs )
-             -- ^ extra arguments
-          -> CabalPlan   -- ^ the build plan to execute
+             -- ^ Extra arguments for each unit in the build plan.
+          -> CabalPlan
+             -- ^ Build plan to execute.
           -> IO ()
 buildPlan verbosity workDir
           pathsForPrep
@@ -420,7 +419,7 @@ buildPlan verbosity workDir
         unitBuildScript pu =
           let pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           in buildUnit verbosity compiler
-                pkgDbDirsForBuild pkgDirForBuild (buildPaths pathsForBuild)
+                (buildPaths pathsForBuild) pkgDbDirsForBuild pkgDirForBuild
                 (userUnitArgs pu)
                 depMap pu
 
@@ -430,13 +429,11 @@ buildPlan verbosity workDir
           logMessage verbosity Normal $ "=== BUILD SUCCEEDED ==="
 
     case buildStrat of
-      Execute (Async n) -> do
-        let j :: Text
-            j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
+      Execute (Async sem) -> do
         normalMsg verbosity $
-          "\nBuilding and installing units asynchronously with " <> j
+          "\nBuilding and installing units asynchronously with " <> semDescription sem
         executeBuildScript preparation
-        AbstractQSem { withAbstractQSem } <- qsem n
+        AbstractSem { withAbstractSem } <- newAbstractSem sem
         (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
           let -- Compile the Setup script of the package the unit belongs to.
@@ -449,7 +446,7 @@ buildPlan verbosity workDir
                   for_ (unitAsyncs Map.!? setupDepId) wait
 
                 -- Setup the package.
-                withAbstractQSem do
+                withAbstractSem do
                   setupScript <- unitSetupScript cu
                   executeBuildScript setupScript
 
@@ -468,7 +465,7 @@ buildPlan verbosity workDir
                   for_ (unitAsyncs Map.!? depUnitId) wait
 
                 -- Build the unit!
-                withAbstractQSem $
+                withAbstractSem $
                   executeBuildScript $ unitBuildScript pu
 
           -- Kick off setting up the packages...

@@ -1,8 +1,6 @@
 
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE MultiWayIf #-}
-{-# LANGUAGE TypeApplications #-}
 
 -- |
 -- Module      :  BuildEnv.Parse
@@ -16,8 +14,6 @@ import Data.Char
   ( isSpace )
 import Data.Bool
   ( bool )
-import Data.Word
-  ( Word8 )
 
 -- containers
 import qualified Data.Map.Strict as Map
@@ -66,7 +62,7 @@ options currWorkDir = do
   workDir   <- optChangeWorkingDirectory currWorkDir
   verbosity <- optVerbosity
   delTemp   <- optTempDirPermanence
-  return $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
+  pure $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
@@ -98,7 +94,7 @@ optCabal = do
     many $ option str (  long "cabal-arg"
                       <> help "Pass argument to 'cabal'"
                       <> metavar "ARG" )
-  return $ Cabal { cabalPath, globalCabalArgs }
+  pure $ Cabal { cabalPath, globalCabalArgs }
 
 -- | Parse a @cwd@ (change working directory) option.
 optChangeWorkingDirectory :: FilePath -> Parser FilePath
@@ -178,7 +174,7 @@ planInputs modeDesc = do
   planUnits <- dependencies modeDesc
   planAllowNewer <- allowNewer
 
-  return $ PlanInputs { planPins, planUnits, planAllowNewer }
+  pure $ PlanInputs { planPins, planUnits, planAllowNewer }
 
 -- | Parse a list of pinned packages from a 'cabal.config' freeze file.
 freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
@@ -247,7 +243,7 @@ dependencies modeDesc
     explicitUnits = do
       units  <- some ( argument readUnitSpec (metavar "UNIT" <> help unitsHelp) )
       locals <- many localPkg
-      return $ Explicit $
+      pure $ Explicit $
         foldl unionUnitSpecsCombining Map.empty units
          `unionUnitSpecsCombining`
            Map.fromList
@@ -316,7 +312,7 @@ fetchDescription :: Parser FetchDescription
 fetchDescription = do
   fetchInputPlan <- plan Fetching
   rawFetchDir    <- optFetchDir Fetching
-  return $ FetchDescription { rawFetchDir, fetchInputPlan }
+  pure $ FetchDescription { rawFetchDir, fetchInputPlan }
 
 -- | Parse the fetch directory.
 optFetchDir :: ModeDescription -> Parser FilePath
@@ -349,7 +345,7 @@ build = do
   buildFetch     <- optFetch
   userUnitArgs   <- optUnitArgs
 
-  return $
+  pure $
     Build { buildFetch
           , buildBuildPlan
           , buildStrategy
@@ -360,15 +356,18 @@ build = do
 
     optStrategy :: Parser BuildStrategy
     optStrategy =
-      script <|> async <|> pure (Execute TopoSort)
+      asum
+        [ script
+        , Execute . Async <$> asyncSem
+        , pure $ Execute TopoSort ]
 
-    async :: Parser BuildStrategy
-    async = Execute . Async <$>
-      option (auto @Word8 <|> return 0)
+    asyncSem :: Parser AsyncSem
+    asyncSem =
+      option (fmap NewQSem auto <|> pure NoSem)
         (  short 'j'
         <> long "async"
         <> help "Use asynchronous package building"
-        <> metavar "NUM_THREADS" )
+        <> metavar "N" )
 
     script :: Parser BuildStrategy
     script = do
@@ -381,7 +380,7 @@ build = do
         switch
          (  long "variables"
          <> help "Use variables in the shell script output ($PREFIX etc)" )
-      return $ Script { scriptPath, useVariables }
+      pure $ Script { scriptPath, useVariables }
 
     optFetch :: Parser Fetch
     optFetch =
@@ -424,7 +423,7 @@ build = do
       confArgs  <- optConfigureArgs
       mbDocArgs <- optHaddockArgs
       regArgs   <- optGhcPkgArgs
-      return $ \ cu ->
+      pure $ \ cu ->
         UnitArgs { configureArgs = confArgs cu
                  , mbHaddockArgs = fmap ($ cu) mbDocArgs
                  , registerArgs  = regArgs cu }
@@ -434,7 +433,7 @@ build = do
       args <- many $ option str (  long "configure-arg"
                                 <> help "Pass argument to 'Setup configure'"
                                 <> metavar "ARG" )
-      return $ const args
+      pure $ const args
 
     optHaddockArgs :: Parser ( Maybe ( ConfiguredUnit -> Args ) )
     optHaddockArgs = do
@@ -446,7 +445,7 @@ build = do
         option str (  long "haddock-arg"
                    <> help "Pass argument to 'Setup haddock'"
                    <> metavar "ARG" )
-      return $
+      pure $
         if null args && not doHaddock
         then Nothing
         else Just $ const args
@@ -457,4 +456,4 @@ build = do
         option str (  long "ghc-pkg-arg"
                    <> help "Pass argument to 'ghc-pkg register'"
                    <> metavar "ARG" )
-      return $ const args
+      pure $ const args
