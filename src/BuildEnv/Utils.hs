@@ -71,26 +71,26 @@ import BuildEnv.Config
 -- | The path of a program to run.
 data ProgPath
   -- | An absolute path, or an executable in @PATH@.
-  = AbsPath { progPath :: FilePath }
+  = AbsPath { progPath :: !FilePath }
   -- | A relative path. What it is relative to depends on context.
-  | RelPath { progPath :: FilePath }
+  | RelPath { progPath :: !FilePath }
 
 -- | Arguments to 'callProcess'.
 data CallProcess
   = CP
-  { cwd          :: FilePath
+  { cwd          :: !FilePath
      -- ^ Working directory.
-  , extraPATH    :: [FilePath]
+  , extraPATH    :: ![FilePath]
      -- ^ Absolute filepaths to add to PATH.
-  , extraEnvVars :: [(String, String)]
-     -- ^ Extra environment variables to add before running the command.
-  , prog         :: ProgPath
+  , extraEnvVars :: ![(String, String)]
+     -- ^ Extra envi!ronment variables to add before running the command.
+  , prog         :: !ProgPath
      -- ^ The program to run.
      --
      -- If it's a relative path, it should be relative to the @cwd@ field.
-  , args         :: Args
+  , args         :: !Args
      -- ^ Arguments to the program.
-  , sem          :: AbstractQSem
+  , sem          :: !AbstractQSem
      -- ^ Lock to take when calling the process
      -- and waiting for it to return, to avoid
      -- contention in concurrent situations.

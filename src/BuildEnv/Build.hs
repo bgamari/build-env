@@ -93,7 +93,7 @@ import qualified Data.Text.IO as Text
 -- build-env
 import BuildEnv.BuildOne
   ( PkgDbDirs(..)
-  , getPkgDbDirsCan, getPkgDbDirsOut, getPkgDir
+  , getPkgDbDirsForPrep, getPkgDbDirsForBuild, getPkgDir
   , setupPackage, buildUnit )
 import BuildEnv.CabalPlan
 import qualified BuildEnv.CabalPlan as Configured
@@ -278,9 +278,9 @@ cabalFileContentsFromPackages units =
 -- @pkg.cabal@ and @cabal.project@.
 data CabalFilesContents
   = CabalFilesContents
-    { cabalContents   :: Text
+    { cabalContents   :: !Text
       -- ^ The package Cabal file contents.
-    , projectContents :: Text
+    , projectContents :: !Text
       -- ^ The @cabal.project@ file contents.
     }
 
@@ -344,51 +344,40 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- Note: this function will fail if one of the packages has already been
 -- registered in the package database.
 buildPlan :: Verbosity
-          -> Compiler
           -> FilePath -- ^ working directory
                       -- (used only to make local packages relative)
-          -> Dirs Raw -- ^ directory structure
+          -> Paths ForPrep
+              -- ^ paths to use to prepare the build
+          -> Paths ForBuild
+              -- ^ paths to use to perform the build
           -> BuildStrategy
           -> ( ConfiguredUnit -> UnitArgs )
              -- ^ extra arguments
           -> CabalPlan   -- ^ the build plan to execute
           -> IO ()
-buildPlan verbosity comp
-          workDir destDir0
+buildPlan verbosity workDir
+          pathsForPrep
+          pathsForBuild
           buildStrat
           userUnitArgs
           cabalPlan
   = do
-    dirs <- canonicalizeDirs destDir0
-
+    let BuildPaths { compiler, prefix, destDir, installDir }
+         = buildPaths pathsForBuild
     -- Create the temporary package database, if it doesn't already exist.
     -- We also create the final installation package database,
     -- but this happens later, in (*), as part of the build script itself.
     --
     -- See Note [Using two package databases] in BuildOne.
-    let PkgDbDirsCan { tempPkgDbDir } = getPkgDbDirsCan dirs
+    let PkgDbDirsForPrep { tempPkgDbDir } = getPkgDbDirsForPrep pathsForPrep
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
     when tempPkgDbExists $
      removeDirectoryRecursive tempPkgDbDir
        `catch` \ ( _ :: IOException ) -> return ()
     createDirectoryIfMissing True tempPkgDbDir
 
-    let useVars :: Bool
-        useVars = case buildStrat of
-                    Script { useVariables } -> useVariables
-                    _                       -> False
-        outDirs :: Dirs ForOutput
-        outDirs@( Dirs { prefix, destDir, installDir } )
-          = dirsForOutput useVars dirs
-        compForOutput :: Compiler
-        compForOutput
-          | useVars
-          = Compiler { ghcPath = "${GHC}", ghcPkgPath = "${GHCPKG}" }
-          | otherwise
-          = comp
-
-    pkgDbDirsOut@( PkgDbDirsOut { finalPkgDbDir } )
-      <- getPkgDbDirsOut outDirs
+    pkgDbDirsForBuild@( PkgDbDirsForBuild { finalPkgDbDir } )
+      <- getPkgDbDirsForBuild pathsForBuild
 
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
@@ -420,18 +409,18 @@ buildPlan verbosity comp
         -- Setup the package for this unit.
         unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
-          let pkgDirCan = getPkgDir workDir dirs    pu
-              pkgDirOut = getPkgDir workDir outDirs pu
-          setupPackage verbosity compForOutput
-            pkgDbDirsOut pkgDirCan pkgDirOut
+          let pkgDirForPrep  = getPkgDir workDir pathsForPrep  pu
+              pkgDirForBuild = getPkgDir workDir pathsForBuild pu
+          setupPackage verbosity compiler
+            pkgDbDirsForBuild pkgDirForPrep pkgDirForBuild
             puSetupDepends
 
         -- Build and install this unit.
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
-          let pkgDir = getPkgDir workDir outDirs pu
-          in buildUnit verbosity compForOutput
-                pkgDbDirsOut pkgDir outDirs
+          let pkgDirForBuild = getPkgDir workDir pathsForBuild pu
+          in buildUnit verbosity compiler
+                pkgDbDirsForBuild pkgDirForBuild (buildPaths pathsForBuild)
                 (userUnitArgs pu)
                 depMap pu
 
@@ -441,7 +430,7 @@ buildPlan verbosity comp
           logMessage verbosity Normal $ "=== BUILD SUCCEEDED ==="
 
     case buildStrat of
-      Async n -> do
+      Execute (Async n) -> do
         let j :: Text
             j = "-j" <> case n of { 0 -> "" ; _ -> Text.pack (show n) }
         normalMsg verbosity $
@@ -490,7 +479,7 @@ buildPlan verbosity comp
         mapM_ wait unitAsyncs
         executeBuildScript finish
 
-      TopoSort -> do
+      Execute TopoSort -> do
         normalMsg verbosity "\nBuilding and installing units sequentially.\n\
                             \NB: pass -j<N> for increased parallelism."
         executeBuildScript preparation

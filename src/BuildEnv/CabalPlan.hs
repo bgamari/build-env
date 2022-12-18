@@ -101,7 +101,7 @@ import qualified Data.Text as Text
 -- Build plans
 
 -- | Units in a Cabal @plan.json@ file.
-data CabalPlan = CabalPlan { planUnits :: [PlanUnit] }
+newtype CabalPlan = CabalPlan { planUnits :: [PlanUnit] }
 
 mapMaybePlanUnits :: (PlanUnit -> Maybe a) -> CabalPlan -> [a]
 mapMaybePlanUnits f (CabalPlan units) = mapMaybe f units
@@ -157,8 +157,8 @@ newtype AllowNewer = AllowNewer ( Set (Text, Text) )
 type PkgSpecs = Strict.Map PkgName PkgSpec
 
 -- | Constraints and flags for a package.
-data PkgSpec = PkgSpec { psConstraints :: Maybe Constraints
-                       , psFlags :: FlagSpec
+data PkgSpec = PkgSpec { psConstraints :: !( Maybe Constraints )
+                       , psFlags       :: !FlagSpec
                        }
   deriving stock Show
 
@@ -240,7 +240,7 @@ flagSpecIsEmpty (FlagSpec fs) = null fs
 --   - @Just fp@: specified by the @cabal@ file at the given path.
 data PkgSrc
   = Remote
-  | Local FilePath
+  | Local !FilePath
   deriving stock Show
 
 instance Semigroup PkgSrc where
@@ -272,8 +272,8 @@ newtype UnitId = UnitId { unUnitId :: Text }
     deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
 
 data PlanUnit
-  = PU_Preexisting PreexistingUnit
-  | PU_Configured  ConfiguredUnit
+  = PU_Preexisting !PreexistingUnit
+  | PU_Configured  !ConfiguredUnit
   deriving stock Show
 
 planUnitUnitId :: PlanUnit -> UnitId
@@ -345,25 +345,25 @@ instance FromJSON PlanUnit where
 -- | Information about a built-in pre-existing unit (such as @base@).
 data PreexistingUnit
   = PreexistingUnit
-    { puId      :: UnitId
-    , puPkgName :: PkgName
-    , puVersion :: Version
-    , puDepends :: [UnitId]
+    { puId      :: !UnitId
+    , puPkgName :: !PkgName
+    , puVersion :: !Version
+    , puDepends :: ![UnitId]
     }
   deriving stock Show
 
 -- | Information about a unit: name, version, dependencies, flags.
 data ConfiguredUnit
   = ConfiguredUnit
-    { puId            :: UnitId
-    , puPkgName       :: PkgName
-    , puVersion       :: Version
-    , puComponentName :: ComponentName
-    , puFlags         :: FlagSpec
-    , puDepends       :: [UnitId]
-    , puExeDepends    :: [UnitId]
-    , puSetupDepends  :: [UnitId]
-    , puPkgSrc        :: PkgSrc
+    { puId            :: !UnitId
+    , puPkgName       :: !PkgName
+    , puVersion       :: !Version
+    , puComponentName :: !ComponentName
+    , puFlags         :: !FlagSpec
+    , puDepends       :: ![UnitId]
+    , puExeDepends    :: ![UnitId]
+    , puSetupDepends  :: ![UnitId]
+    , puPkgSrc        :: !PkgSrc
     }
   deriving stock Show
 
@@ -391,9 +391,9 @@ type UnitSpecs = Strict.Map PkgName (PkgSrc, PkgSpec, Set ComponentName)
 
 -- | The name of a cabal component, e.g. @lib:comp@.
 data ComponentName =
-  ComponentName { componentType :: ComponentType
+  ComponentName { componentType :: !ComponentType
                    -- ^ What's before the colon, e.g. @lib@, @exe@, @setup@...
-                , componentName :: Text
+                , componentName :: !Text
                    -- ^ The actual name of the component
                 }
     deriving stock (Eq, Ord, Show)

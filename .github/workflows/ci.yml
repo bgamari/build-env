@@ -37,7 +37,7 @@ jobs:
       run: |
         mkdir -p localpkgs
         ( cd localpkgs ; cabal get distributive-0.6.2.1 )
-        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources -o install --script build_free.sh --variables -v2
+        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources --script build_free.sh --variables -v2
         mkdir -p build
         cp build_free.sh build/build_free.sh
         cp -a sources   build/srcs

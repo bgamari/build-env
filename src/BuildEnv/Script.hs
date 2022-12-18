@@ -110,9 +110,9 @@ data BuildStep
   -- | Call a processs with the given arguments.
   = CallProcess CallProcess
   -- | Create the given directory.
-  | CreateDir FilePath
+  | CreateDir   FilePath
   -- | Log a message.
-  | LogMessage String
+  | LogMessage  String
 
 -- | Declare a build step.
 step :: BuildStep -> BuildScript
@@ -144,7 +144,7 @@ data ScriptOutput
   = Run
   -- | Generate a shell script.
   | Shell
-    { useVariables :: Bool
+    { useVariables :: !Bool
       -- ^ Replace various values with variables, so that
       -- they can be set before running the build script.
       --
