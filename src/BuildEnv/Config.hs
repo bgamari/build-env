@@ -160,8 +160,11 @@ data Paths use
   = Paths
     { fetchDir   :: !FilePath
        -- ^ Input fetched sources directory.
-    , buildPaths :: !(BuildPaths use)
+    , buildPaths :: BuildPaths use
       -- ^ Output build directory structure.
+      --
+      -- NB: this will be bottom in the case that we are outputing
+      -- a shell script that uses variables.
     }
 
 -- | The directory structure relevant to executing a build plan.
@@ -212,7 +215,7 @@ canonicalizePaths :: Compiler
 canonicalizePaths compiler buildStrat
   ( Paths
     { fetchDir   = fetchDir0
-    , buildPaths = RawBuildPaths { rawPrefix, rawDestDir } } )
+    , buildPaths = rawBuildPaths } )
   = do
       fetchDir <- canonicalizePath fetchDir0
       forBuild <-
@@ -229,7 +232,11 @@ canonicalizePaths compiler buildStrat
                           , compiler =
                             Compiler { ghcPath = "${GHC}"
                                      , ghcPkgPath = "${GHCPKG}" } } }
-          _don'tUseVars -> do
+          _don'tUseVars
+            | RawBuildPaths { rawPrefix, rawDestDir } <- rawBuildPaths
+            -- If we use variables, 'rawBuildPaths' might be undefined,
+            -- so only force it after checking whether we are using variables.
+            -> do
             prefix     <- canonicalizePath rawPrefix
             destDir    <- canonicalizePath rawDestDir
             installDir <- canonicalizePath ( rawDestDir </> dropDrive prefix )
