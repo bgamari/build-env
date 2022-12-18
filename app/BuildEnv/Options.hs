@@ -76,7 +76,7 @@ data PlanInputs
 -- and what build plan they correspond to.
 data FetchDescription
   = FetchDescription
-    { fetchDir       :: FilePath
+    { rawFetchDir    :: FilePath
       -- ^ Directory for fetched sources.
     , fetchInputPlan :: Plan
       -- ^ The build plan corresponding to the fetched sources.
@@ -117,11 +117,14 @@ data NewOrExisting
 -- | Information needed to perform a build.
 data Build
   = Build
-    { buildDirs       :: Dirs Raw
+    { buildRawPaths   :: Paths Raw
       -- ^ The directories relevant for the build:
       --
       --  - fetched sources directory,
-      --  - build output directory structure.
+      --  - build output directory structure
+      --
+      -- NB: the build directories are ignored if we are ouputting
+      -- a shell script containing variables.
     , buildFetch      :: Fetch
       -- ^ How to obtain the fetched sources,
       -- including the build plan.

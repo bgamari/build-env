@@ -46,19 +46,22 @@ main = do
         normalMsg verbosity $
           "Writing build plan to '" <> Text.pack planOutput <> "'"
         Lazy.ByteString.writeFile planOutput planBinary
-      FetchMode ( FetchDescription { fetchDir, fetchInputPlan } ) newOrUpd -> do
+      FetchMode ( FetchDescription { rawFetchDir, fetchInputPlan } ) newOrUpd -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal fetchInputPlan
+        fetchDir <- canonicalizePath rawFetchDir
         doFetch verbosity cabal fetchDir True newOrUpd plan
       BuildMode ( Build { buildBuildPlan
                         , buildFetch, buildStrategy
-                        , buildDirs = buildDirs@( Dirs { fetchDir } )
+                        , buildRawPaths = rawPaths
                         , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
+        ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
+          <- canonicalizePaths compiler buildStrategy rawPaths
         case buildFetch of
           Prefetched     -> return ()
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
-        buildPlan verbosity compiler workDir buildDirs buildStrategy
-          userUnitArgs plan
+        buildPlan verbosity workDir pathsForPrep pathsForBuild
+          buildStrategy userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

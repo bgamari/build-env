@@ -2,6 +2,7 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- |
 -- Module      :  BuildEnv.Parse
@@ -314,8 +315,8 @@ plan modeDesc = ( UsePlan <$> optPlanPath )
 fetchDescription :: Parser FetchDescription
 fetchDescription = do
   fetchInputPlan <- plan Fetching
-  fetchDir       <- optFetchDir Fetching
-  return $ FetchDescription { fetchDir, fetchInputPlan }
+  rawFetchDir    <- optFetchDir Fetching
+  return $ FetchDescription { rawFetchDir, fetchInputPlan }
 
 -- | Parse the fetch directory.
 optFetchDir :: ModeDescription -> Parser FilePath
@@ -342,25 +343,28 @@ newOrExisting =
 build :: Parser Build
 build = do
 
-  buildBuildPlan  <- plan Building
-  buildDirs       <- optDirs
-  buildStrategy   <- optStrategy
-  buildFetch      <- optFetch
-  userUnitArgs    <- optUnitArgs
+  buildBuildPlan <- plan Building
+  buildStrategy  <- optStrategy
+  buildRawPaths  <- optRawPaths
+  buildFetch     <- optFetch
+  userUnitArgs   <- optUnitArgs
 
-  return $ Build { buildFetch
-                 , buildBuildPlan
-                 , buildStrategy
-                 , buildDirs
-                 , userUnitArgs }
+  return $
+    Build { buildFetch
+          , buildBuildPlan
+          , buildStrategy
+          , buildRawPaths
+          , userUnitArgs }
 
   where
 
     optStrategy :: Parser BuildStrategy
-    optStrategy = (Async <$> async) <|> script <|> pure TopoSort
+    optStrategy =
+      script <|> async <|> pure (Execute TopoSort)
 
-    async :: Parser Word8
-    async = option (auto <|> return 0)
+    async :: Parser BuildStrategy
+    async = Execute . Async <$>
+      option (auto @Word8 <|> return 0)
         (  short 'j'
         <> long "async"
         <> help "Use asynchronous package building"
@@ -375,8 +379,8 @@ build = do
           <> metavar "OUTFILE" )
       useVariables <-
         switch
-          (  long "variables"
-          <> help "Use variables in the shell script output ($PREFIX etc)" )
+         (  long "variables"
+         <> help "Use variables in the shell script output ($PREFIX etc)" )
       return $ Script { scriptPath, useVariables }
 
     optFetch :: Parser Fetch
@@ -389,26 +393,29 @@ build = do
         (  long "prefetched"
         <> help "Use prefetched sources instead of fetching from Hackage" )
 
-    optDirs :: Parser (Dirs Raw)
-    optDirs = do
+    optRawPaths :: Parser ( Paths Raw )
+    optRawPaths = do
       fetchDir <- optFetchDir Building
-      prefix <-
+      rawPrefix <-
         option str (  short 'o'
                    <> long "prefix"
                    <> help "Installation prefix"
+                   <> value "install"
+                       -- Having this default value is helpful when outputting
+                       -- a shell script that uses variables, as in that case
+                       -- we ignore it completely, so it's annoying to require
+                       -- the user to specify it.
+                       --
+                       -- It would be better to make this optional conditional
+                       -- on whether the user has passed --variables, but
+                       -- that can't be easily done with optparse-applicative.
                    <> metavar "OUTDIR" )
-      destDir <-
+      rawDestDir <-
         option str (  long "destdir"
                    <> help "Installation destination directory"
                    <> value "/"
                    <> metavar "OUTDIR" )
-      return $
-        Dirs
-          { fetchDir
-          , destDir
-          , prefix
-          , installDir = ()
-          }
+      pure $ Paths { fetchDir, buildPaths = RawBuildPaths { rawPrefix, rawDestDir } }
 
     -- TODO: we only support passing arguments for all units at once,
     -- rather than per-unit.

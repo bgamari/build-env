@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE RoleAnnotations #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
@@ -23,7 +24,7 @@ module BuildEnv.BuildOne
   , PkgDir(..)
   , getPkgDir
   , PkgDbDirs(..)
-  , getPkgDbDirsCan, getPkgDbDirsOut
+  , getPkgDbDirsForPrep, getPkgDbDirsForBuild
   ) where
 
 -- base
@@ -74,25 +75,25 @@ import BuildEnv.Utils
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
              -> Compiler
-             -> PkgDbDirs ForOutput
-             -> PkgDir    Canonicalised
-             -> PkgDir    ForOutput
+             -> PkgDbDirs ForBuild
+             -> PkgDir    ForPrep
+             -> PkgDir    ForBuild
              -> [UnitId] -- ^ @UnitId@s of @setup-depends@
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
-             ( PkgDbDirsOut { tempPkgDbDir } )
-             ( PkgDir { pkgNameVer, pkgDir = pkgDirCan } )
-             ( PkgDir { pkgDir = pkgDirOut } )
+             ( PkgDbDirsForBuild { tempPkgDbDir } )
+             ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
+             ( PkgDir { pkgDir = buildPkgDir } )
              setupDepIds
 
   = do -- Find the appropriate Setup.hs file (creating one if necessary)
-       setupHs <- findSetupHs pkgDirCan
+       setupHs <- findSetupHs prepPkgDir
        return do
          scriptCfg <- askScriptConfig
-         let setupArgs = [ quoteArg scriptCfg (pkgDirOut </> setupHs)
+         let setupArgs = [ quoteArg scriptCfg (buildPkgDir </> setupHs)
                          , "-o"
-                         , quoteArg scriptCfg (pkgDirOut </> "Setup")
+                         , quoteArg scriptCfg (buildPkgDir </> "Setup")
                          , "-package-db=" ++ quoteArg scriptCfg tempPkgDbDir
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg setupDepIds
@@ -147,9 +148,9 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- registered in the package database.
 buildUnit :: Verbosity
           -> Compiler
-          -> PkgDbDirs ForOutput -- ^ package database directories (see 'getPkgDbDirs')
-          -> PkgDir    ForOutput -- ^ package directory (see 'getPkgDir')
-          -> Dirs ForOutput
+          -> PkgDbDirs  ForBuild -- ^ package database directories (see 'getPkgDbDirs')
+          -> PkgDir     ForBuild -- ^ package directory (see 'getPkgDir')
+          -> BuildPaths ForBuild
                       -- ^ directory structure
           -> UnitArgs -- ^ extra arguments for this unit
           -> Map UnitId PlanUnit -- ^ all dependencies in the build plan
@@ -157,14 +158,13 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
-          ( PkgDbDirsOut
+          ( PkgDbDirsForBuild
             { tempPkgDbDir
             , finalPkgDbDir
             , tempPkgDbSem
             , finalPkgDbSem } )
-          ( PkgDir { pkgDir
-                   , pkgNameVer } )
-          ( Dirs { installDir, prefix, destDir } )
+          ( PkgDir { pkgDir, pkgNameVer } )
+          ( BuildPaths { installDir, prefix, destDir } )
           ( UnitArgs { configureArgs = userConfigureArgs
                      , mbHaddockArgs = mbUserHaddockArgs
                      , registerArgs  = userGhcPkgArgs } )
@@ -398,26 +398,24 @@ haven't been copied over yet.
 -- | The package database directories.
 --
 -- See Note [Using two package databases].
-type PkgDbDirs :: PathType -> Type
-data family PkgDbDirs pathTy
+type PkgDbDirs :: PathUsability -> Type
+data family PkgDbDirs use
 
-data instance PkgDbDirs Canonicalised
-  = PkgDbDirsCan
-    { tempPkgDbDir  :: StagedPath Canonicalised
+data instance PkgDbDirs ForPrep
+  = PkgDbDirsForPrep
+    { tempPkgDbDir  :: !FilePath
         -- ^ Local package database directory
-    , finalPkgDbDir :: StagedPath Canonicalised
-        -- ^ Installation package database directory
     }
-data instance PkgDbDirs ForOutput
-  = PkgDbDirsOut
-    { tempPkgDbDir  :: StagedPath ForOutput
+data instance PkgDbDirs ForBuild
+  = PkgDbDirsForBuild
+    { tempPkgDbDir  :: !FilePath
         -- ^ Local package database directory
-    , tempPkgDbSem  :: QSem
+    , tempPkgDbSem  :: !QSem
         -- ^ Semaphore controlling access to the temporary
         -- package database.
-    , finalPkgDbDir :: StagedPath ForOutput
+    , finalPkgDbDir :: !FilePath
         -- ^ Installation package database directory
-    , finalPkgDbSem :: QSem
+    , finalPkgDbSem :: !QSem
         -- ^ Semaphore controlling access to the installation
         -- package database.
     }
@@ -426,46 +424,45 @@ data instance PkgDbDirs ForOutput
 -- to use.
 --
 -- See Note [Using two package databases].
-getPkgDbDirsCan :: Dirs Canonicalised -> PkgDbDirs Canonicalised
-getPkgDbDirsCan ( Dirs { fetchDir, installDir } ) =
-    PkgDbDirsCan { tempPkgDbDir, finalPkgDbDir }
-    where
-      tempPkgDbDir  = fetchDir   </> "package.conf"
-      finalPkgDbDir = installDir </> "package.conf"
+getPkgDbDirsForPrep :: Paths ForPrep -> PkgDbDirs ForPrep
+getPkgDbDirsForPrep ( Paths { fetchDir } ) =
+    PkgDbDirsForPrep { tempPkgDbDir = fetchDir </> "package.conf" }
 
 -- | Compute the paths of the package database directories we are going
 -- to use, and create some semaphores to control access to them
 -- in order to avoid contention.
 --
 -- See Note [Using two package databases].
-getPkgDbDirsOut :: Dirs ForOutput -> IO (PkgDbDirs ForOutput)
-getPkgDbDirsOut ( Dirs { fetchDir, installDir } ) = do
+getPkgDbDirsForBuild :: Paths ForBuild -> IO (PkgDbDirs ForBuild)
+getPkgDbDirsForBuild ( Paths { fetchDir, buildPaths = BuildPaths { installDir } } ) = do
   tempPkgDbSem  <- newQSem 1
   finalPkgDbSem <- newQSem 1
   return $
-    PkgDbDirsOut { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
+    PkgDbDirsForBuild { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
     where
       tempPkgDbDir  = fetchDir   </> "package.conf"
       finalPkgDbDir = installDir </> "package.conf"
 
 -- | The package @name-version@ string and its directory.
-type PkgDir :: PathType -> Type
-data PkgDir pathTy
+type PkgDir :: PathUsability -> Type
+data PkgDir use
   = PkgDir
-    { pkgNameVer    :: String
+    { pkgNameVer :: !String
         -- ^ Package @name-version@ string
-    , pkgDir        :: StagedPath pathTy
+    , pkgDir     :: !FilePath
         -- ^ Package directory
     }
+type role PkgDir representational
+  -- Don't allow accidentally passing a @PkgDir ForPrep@ where one expects
+  -- a @PkgDir ForBuild@.
 
 -- | Compute some directory paths relevant to installation and registration
 -- of a package.
-getPkgDir :: (StagedPath pathTy ~ FilePath)
-          => FilePath -- ^ working directory
-          -> Dirs pathTy
+getPkgDir :: FilePath -- ^ working directory
+          -> Paths use
           -> ConfiguredUnit -- ^ any unit from the package in question
-          -> PkgDir pathTy
-getPkgDir workDir ( Dirs { fetchDir } )
+          -> PkgDir use
+getPkgDir workDir ( Paths { fetchDir } )
           ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } )
   = PkgDir { pkgNameVer, pkgDir }
     where
