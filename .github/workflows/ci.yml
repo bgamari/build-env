@@ -31,6 +31,11 @@ jobs:
     - name: "Build executable"
       run: cabal build exe:build-env
 
+    - name: "Build 'haskell-src-exts' (test build-tool-depends datadir)"
+      working-directory: ./tests/ExeDataDir
+      run: |
+        cabal run exe:build-env -- build haskell-src-exts -f sources -o install -v2
+
     - name: "Relocate and run a build script for 'free' (with local 'distributive')"
       working-directory: ./tests/RelocatableScript
       if: runner.os != 'Windows'
