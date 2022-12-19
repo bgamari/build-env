@@ -217,12 +217,14 @@ buildUnit verbosity
              -- dependencies during the build.
            , extraPATH = [ quoteArg scriptCfg $ installDir </> "bin" ]
 
-              -- Specify the data directories for all dependencies.
+              -- Specify the data directories for all dependencies,
+              -- including executable dependencies (see (**)).
+              -- This is important so that e.g. 'happy' can find its datadir.
            , extraEnvVars =
                [ ( mangledPkgName depName <> "_datadir"
                  , quoteArg scriptCfg $
                    installDir </> Text.unpack (pkgNameVersion depName depVer) )
-               | depUnitId <- Configured.puDepends unit
+               | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
                , let dep     = lookupDependency unit depUnitId plan
                      depName = planUnitPkgName dep
                      depVer  = planUnitVersion dep
@@ -455,7 +457,7 @@ type role PkgDir representational
   -- Don't allow accidentally passing a @PkgDir ForPrep@ where one expects
   -- a @PkgDir ForBuild@.
 
--- | Compute the package directory location. 
+-- | Compute the package directory location.
 getPkgDir :: FilePath
               -- ^ Working directory
               -- (used only to relativise paths to local packages).
