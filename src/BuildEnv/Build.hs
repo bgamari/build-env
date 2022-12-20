@@ -39,7 +39,7 @@ import Control.Monad.Fix
 import Data.Char
   ( isSpace )
 import Data.Foldable
-  ( for_ )
+  ( for_, toList )
 import Data.Maybe
   ( mapMaybe, maybeToList, isNothing )
 import Data.String
@@ -59,7 +59,7 @@ import qualified Data.ByteString.Lazy as Lazy.ByteString
 
 -- containers
 import qualified Data.Graph as Graph
-  ( graphFromEdges', reverseTopSort )
+  ( dfs, graphFromEdges, reverseTopSort )
 import Data.Map.Strict
   ( Map )
 import qualified Data.Map.Strict as Map
@@ -69,7 +69,7 @@ import qualified Data.Map.Lazy as Lazy.Map
 import Data.Set
   ( Set )
 import qualified Data.Set as Set
-  ( elems, fromList, toList )
+  ( elems, fromList, member, toList )
 
 -- directory
 import System.Directory
@@ -349,6 +349,9 @@ buildPlan :: Verbosity
           -> Paths ForPrep
           -> Paths ForBuild
           -> BuildStrategy
+          -> Maybe [ UnitId ]
+             -- ^ @Just units@: only build @units@ and their transitive
+             -- dependencies, instead of the full build plan.
           -> ( ConfiguredUnit -> UnitArgs )
              -- ^ Extra arguments for each unit in the build plan.
           -> CabalPlan
@@ -358,6 +361,7 @@ buildPlan verbosity workDir
           pathsForPrep
           pathsForBuild
           buildStrat
+          mbOnlyBuildDepsOf
           userUnitArgs
           cabalPlan
   = do
@@ -513,7 +517,7 @@ buildPlan verbosity workDir
     -- Units to build, in dependency order.
     unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
     unitsToBuild
-      = tagUnits $ sortPlan cabalPlan
+      = tagUnits $ sortPlan mbOnlyBuildDepsOf cabalPlan
 
     unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
     unitMap = Lazy.Map.fromList
@@ -527,16 +531,36 @@ buildPlan verbosity workDir
 
 
 -- | Sort the units in a 'CabalPlan' in dependency order.
-sortPlan :: CabalPlan -> [ConfiguredUnit]
-sortPlan plan =
-    map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
+sortPlan :: Maybe [ UnitId ]
+             -- ^ - @Just keep@ <=> only return units that belong
+             --     to the transitive closure of @keep@.
+             --   - @Nothing@ <=> return all units in the plan.
+         -> CabalPlan
+         -> [ConfiguredUnit]
+sortPlan mbOnlyDepsOf plan =
+    onlyInteresting $ map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
   where
+
+    onlyInteresting :: [ConfiguredUnit] -> [ConfiguredUnit]
+    onlyInteresting =
+      case mbOnlyDepsOf of
+        Nothing         -> id
+        Just onlyDepsOf ->
+          let reachableUnits :: Set UnitId
+              reachableUnits
+                = Set.fromList
+                $ map ( Configured.puId . fst3 . lookupVertex )
+                $ concatMap toList
+                $ Graph.dfs gr
+                $ mapMaybe mkVertex onlyDepsOf
+          in filter \ ( ConfiguredUnit { puId } ) -> puId `Set.member` reachableUnits
+
     fst3 :: (a,b,c) -> a
     fst3 (a,_,_) = a
-    (gr, lookupVertex) = Graph.graphFromEdges'
-       [ (pu, puId, allDepends pu)
-       | PU_Configured pu@(ConfiguredUnit { puId }) <- planUnits plan
-       ]
+    ( gr, lookupVertex, mkVertex ) =
+      Graph.graphFromEdges
+        [ (pu, puId, allDepends pu)
+        | PU_Configured pu@( ConfiguredUnit { puId } ) <- planUnits plan ]
 
 -- | Tag units in a build plan: the first unit we compile in each package
 -- is tagged (with @'Nothing'@) as having the responsibility to build

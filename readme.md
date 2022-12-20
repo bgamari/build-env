@@ -13,7 +13,8 @@ in hermetic build environments.
 - [Example](#example)
 - [Commands](#commands)
 - [What does `build-env` do?](#what-does-build-env-do)
-- [Deferred builds](#deferred-builds)
+- [Hermetic builds](#hermetic-builds)
+  - [Narrowing a build down (for debugging)](#narrowing-a-build-down-for-debugging)
 - [Bootstrapping](#bootstrapping)
   - [Bootstrap arguments](#bootstrap-arguments)
 - [Specifying packages](#specifying-packages)
@@ -91,7 +92,7 @@ when running the `Setup` script:
 Problems will likely arise if you pass extra arguments that override any of
 these, for example by using `--configure-arg ARG` on the command line.
 
-## Deferred builds
+## Hermetic builds
 
 When working in a hermetic build environment, we might need to compute a build
 plan and fetch all the dependencies first, before doing an offline build.
@@ -117,10 +118,30 @@ In this example:
     the required sources, putting them into the `sources` directory;
   - the `build` command reads in the build plan and performs the build.
 
+### Narrowing a build down (for debugging)
+
+When attempting to execute a large build plan, it can be useful to be able
+to refine the build down to a small set of problematic packages, for debugging
+purposes. For this, you can use `--only`, e.g.:
+
+```
+$ build-env build --prefetched -p plan.json -f sources -o install --only badPackage
+```
+
+Instead of building the full plan from `plan.json`, this will instead restrict
+to only building units from package `badPackage` and their transitive dependencies.  
+Multiple `--only` arguments combine additively, e.g. `--only pkg1 --only pkg2`
+will build the units from the build plan that belong to `pkg1` or `pkg2`, and
+transitive dependencies thereof.
+
+Note that `--only` only affects which packages are built; it does not change
+the computation of the build plan nor which packages are fetched.
+
 ## Bootstrapping
 
-In the above example, we ran `build-env build` to perform a build. However,
-this requires that the build environment provision `build-env`.
+In the example from [§ Hermetic builds](#hermetic-builds), we ran
+`build-env build` to perform a build. However, this requires that the build
+environment provision `build-env`.
 
 To avoid this requirement, it is also possible to ask `build-env` to output
 a shell script containing the build steps to execute.
@@ -139,6 +160,10 @@ $ ./build_lens.sh
 
 The downside is that we lose any parallelism from this approach, as the
 generated build script is inherently sequential.
+
+One particularly useful application is the bootstrapping of `build-env` itself,
+as this supplies a mechanism for the provisioning of `build-env` in build
+environments.
 
 ### Bootstrap arguments
 

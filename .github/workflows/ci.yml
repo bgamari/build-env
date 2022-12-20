@@ -31,10 +31,17 @@ jobs:
     - name: "Build executable"
       run: cabal build exe:build-env
 
+    - name: "Refine a build"
+      working-directory: ./tests/Refine
+      run: |
+        cabal run exe:build-env -- build shake -f sources -o install -v2 --only random
+        ghc-pkg --package-db=install/package.conf field random id
+
     - name: "Build 'haskell-src-exts' (test build-tool-depends datadir)"
       working-directory: ./tests/ExeDataDir
       run: |
         cabal run exe:build-env -- build haskell-src-exts -f sources -o install -v2
+        ghc-pkg --package-db=install/package.conf field haskell-src-exts id
 
     - name: "Relocate and run a build script for 'free' (with local 'distributive')"
       working-directory: ./tests/RelocatableScript

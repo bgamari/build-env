@@ -1,6 +1,8 @@
 module Main ( main ) where
 
 -- base
+import Control.Monad
+  ( guard )
 import Data.Foldable
   ( for_ )
 
@@ -12,7 +14,7 @@ import qualified Data.ByteString.Lazy as Lazy.ByteString
 import qualified Data.Map as Map
   ( empty )
 import qualified Data.Set as Set
-  ( empty )
+  ( empty, member )
 
 -- directory
 import System.Directory
@@ -53,6 +55,7 @@ main = do
       BuildMode ( Build { buildBuildPlan
                         , buildFetch, buildStrategy
                         , buildRawPaths = rawPaths
+                        , mbOnlyDepsOf
                         , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
         ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
@@ -60,8 +63,20 @@ main = do
         case buildFetch of
           Prefetched     -> return ()
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
+        let mbOnlyDepsOfUnits :: Maybe [UnitId]
+            mbOnlyDepsOfUnits =
+              case mbOnlyDepsOf of
+                Nothing -> Nothing
+                Just pkgs ->
+                  let wantUnit :: PlanUnit -> Maybe UnitId
+                      wantUnit pu = do
+                        ConfiguredUnit { puPkgName, puId } <- configuredUnitMaybe pu
+                        guard ( puPkgName `Set.member` pkgs )
+                        return puId
+                  in Just $ mapMaybePlanUnits wantUnit plan
+
         buildPlan verbosity workDir pathsForPrep pathsForBuild
-          buildStrategy userUnitArgs plan
+          buildStrategy mbOnlyDepsOfUnits userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

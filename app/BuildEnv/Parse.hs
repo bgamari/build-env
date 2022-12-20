@@ -23,6 +23,8 @@ import System.Environment
 -- containers
 import qualified Data.Map.Strict as Map
   ( empty, fromList, singleton )
+import Data.Set
+  ( Set )
 import qualified Data.Set as Set
   ( fromList, singleton )
 
@@ -367,6 +369,7 @@ build = do
   getBuildStrat      <- optStrategy
   mbBuildPaths       <- optMbBuildPaths
   userUnitArgs       <- optUnitArgs
+  mbOnlyDepsOf       <- optOnlyDepsOf
 
   pure $
     let !(~buildPaths, mbBuildStrategy) =
@@ -383,7 +386,8 @@ build = do
                   , buildBuildPlan
                   , buildStrategy
                   , buildRawPaths
-                  , userUnitArgs }
+                  , userUnitArgs
+                  , mbOnlyDepsOf }
 
   where
 
@@ -488,3 +492,23 @@ build = do
                    <> help "Pass argument to 'ghc-pkg register'"
                    <> metavar "ARG" )
       pure $ const args
+
+    optOnlyDepsOf :: Parser ( Maybe ( Set PkgName ) )
+    optOnlyDepsOf = do
+      pkgs <- many $
+        option pkgName
+          (  long "only"
+          <> help "Only build these packages (and their dependencies)"
+          <> metavar "PKG" )
+      pure $
+        if null pkgs
+        then Nothing
+        else Just $ Set.fromList pkgs
+
+    pkgName :: ReadM PkgName
+    pkgName = do
+      nm <- str
+      if validPackageName nm
+      then return $ PkgName nm
+      else readerError $
+            "Invalid package name: " <> Text.unpack nm
