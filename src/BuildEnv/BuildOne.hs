@@ -179,6 +179,23 @@ buildUnit verbosity
     in do
       scriptCfg <- askScriptConfig
 
+      -- Specify the data directories for all dependencies,
+      -- including executable dependencies (see (**)).
+      -- This is important so that e.g. 'happy' can find its datadir.
+      let env =
+            [ ( mangledPkgName depName <> "_datadir"
+              , quoteArg scriptCfg $
+                installDir </> Text.unpack (pkgNameVersion depName depVer) )
+            | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
+            , let dep     = lookupDependency unit depUnitId plan
+                  depName = planUnitPkgName dep
+                  depVer  = planUnitVersion dep
+            ]
+
+      -- Add the output binary directory to PATH, to satisfy executable
+      -- dependencies during the build.
+      let path = [ quoteArg scriptCfg $ installDir </> "bin" ]
+
       -- Configure
       let flagsArg = case puFlags unit of
             flags
@@ -204,6 +221,7 @@ buildUnit verbosity
                             ++ userConfigureArgs
                           ++ [ buildTarget unit ]
           setupExe = RelPath $ runCwdExe scriptCfg "Setup" -- relative to pkgDir
+
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
@@ -212,23 +230,8 @@ buildUnit verbosity
         CP { cwd  = pkgDir
            , prog = setupExe
            , args = "configure" : configureArgs
-
-             -- Add the output binary directory to PATH, to satisfy executable
-             -- dependencies during the build.
-           , extraPATH = [ quoteArg scriptCfg $ installDir </> "bin" ]
-
-              -- Specify the data directories for all dependencies,
-              -- including executable dependencies (see (**)).
-              -- This is important so that e.g. 'happy' can find its datadir.
-           , extraEnvVars =
-               [ ( mangledPkgName depName <> "_datadir"
-                 , quoteArg scriptCfg $
-                   installDir </> Text.unpack (pkgNameVersion depName depVer) )
-               | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
-               , let dep     = lookupDependency unit depUnitId plan
-                     depName = planUnitPkgName dep
-                     depVer  = planUnitVersion dep
-              ]
+           , extraPATH = path
+           , extraEnvVars = env
            , sem = noSem
            }
 
@@ -241,8 +244,8 @@ buildUnit verbosity
            , args         = [ "build"
                             , "--builddir=" ++ buildDir
                             , setupVerbosity verbosity]
-           , extraPATH    = []
-           , extraEnvVars = []
+           , extraPATH    = path
+           , extraEnvVars = env
            , sem          = noSem
            }
 
