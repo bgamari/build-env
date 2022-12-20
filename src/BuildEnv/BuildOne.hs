@@ -269,22 +269,20 @@ buildUnit verbosity
            }
 
       -- Haddock
-      case mbUserHaddockArgs of
-        Nothing -> return ()
-        Just userHaddockArgs -> do
-          logMessage verbosity Verbose $
-            "Building documentation for " <> unitPrintableName
-          callProcess $
-            CP { cwd          = pkgDir
-               , prog         = setupExe
-               , args         = [ "haddock"
-                                , "--builddir=" ++ buildDir
-                                , setupVerbosity verbosity ]
-                                  ++ userHaddockArgs
-               , extraPATH    = []
-               , extraEnvVars = []
-               , sem          = noSem
-               }
+      for_ mbUserHaddockArgs \ userHaddockArgs -> do
+        logMessage verbosity Verbose $
+          "Building documentation for " <> unitPrintableName
+        callProcess $
+          CP { cwd          = pkgDir
+             , prog         = setupExe
+             , args         = [ "haddock"
+                              , "--builddir=" ++ buildDir
+                              , setupVerbosity verbosity ]
+                                ++ userHaddockArgs
+             , extraPATH    = []
+             , extraEnvVars = []
+             , sem          = noSem
+             }
 
        -- Copy
       logMessage verbosity Verbose $
