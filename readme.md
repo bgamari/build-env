@@ -58,7 +58,7 @@ with three separate invocations:
 ```
 $ build-env plan lens -p lens-plan.json
 $ build-env fetch -p lens-plan.json -f sources
-$ build-env build -p lens-plan.json -f sources -o install -j8
+$ build-env build -p lens-plan.json -f sources -o install -j8 --prefetched
 ```
 
 Being able to separate these steps affords us some extra flexibility, as
@@ -74,13 +74,13 @@ subsequent sections will explain.
 - **fetch:** `build-env` calls `cabal get` on each package in the build plan.  
   **Required executables:** `cabal`.
 - **build:** `build-env` builds the dependencies by compiling their `Setup`
-  scripts, and calling `Setup configure`, `Setup build`,
+  scripts and calling `Setup configure`, `Setup build`,
   `Setup haddock` (optional), `Setup copy`, and, for libraries, `Setup register`
   and `ghc-pkg register`.  
   **Required executables:** `ghc`, `ghc-pkg`.
 
-Note that, when building packages, `build-env` passes the following arguments
-to the `Setup` script:
+Note that, when building packages, `build-env` passes the following information
+when running the `Setup` script:
 
   - `with-compiler`, `prefix` and `destdir` options supplied by the user,
   - the default `datadir` option,
@@ -88,8 +88,8 @@ to the `Setup` script:
   - package flags and `dependency` arguments, obtained from the build plan,
   - `<pkg>_datadir` environment variables supplied by `build-env`.
 
-Problems will likely arise if you pass extra configure arguments that override
-any of these.
+Problems will likely arise if you pass extra arguments that override any of
+these, for example by using `--configure-arg ARG` on the command line.
 
 ## Deferred builds
 
