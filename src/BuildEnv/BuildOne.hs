@@ -34,6 +34,8 @@ import Data.Foldable
   ( for_ )
 import Data.Kind
   ( Type )
+import Data.Maybe
+  ( maybeToList )
 
 -- containers
 import Data.Map.Strict
@@ -75,17 +77,21 @@ import BuildEnv.Utils
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
              -> Compiler
-             -> PkgDbDirs ForBuild
-             -> PkgDir    ForPrep
-             -> PkgDir    ForBuild
-             -> [UnitId] -- ^ @UnitId@s of the @setup-depends@ of this package.
+             -> BuildPaths ForBuild -- ^ Overall build directory structure.
+             -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
+             -> PkgDir     ForPrep  -- ^ Package directory (to find the @Setup.hs@).
+             -> PkgDir     ForBuild -- ^ Package directory (to build the @Setup.hs@).
+             -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
+             -> ConfiguredUnit      -- ^ The unit to build.
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
+             paths@( BuildPaths { installDir } )
              ( PkgDbDirsForBuild { tempPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
              ( PkgDir { pkgDir = buildPkgDir } )
-             setupDepIds
+             plan
+             unit@( ConfiguredUnit { puSetupDepends } )
 
   = do -- Find the appropriate Setup.hs file (creating one if necessary)
        setupHs <- findSetupHs prepPkgDir
@@ -96,15 +102,27 @@ setupPackage verbosity
                          , quoteArg scriptCfg (buildPkgDir </> "Setup")
                          , "-package-db=" ++ quoteArg scriptCfg tempPkgDbDir
                          , ghcVerbosity verbosity
-                         ] ++ map unitIdArg setupDepIds
+                         ] ++ map unitIdArg puSetupDepends
+
+             -- Specify location of binaries and data directories.
+             --
+             -- See the commentary around 'depDataDirs' in 'buildUnit'.
+             binDir = [ quoteArg scriptCfg $ installDir </> "bin" ]
+             setupDepDataDirs =
+               dataDirs scriptCfg paths
+                 [ dep_cu
+                 | depUnitId <- puSetupDepends
+                 , let dep = lookupDependency unit depUnitId plan
+                 , dep_cu <- maybeToList $ configuredUnitMaybe dep
+                 ]
          logMessage verbosity Verbose $
            "Compiling Setup.hs for " <> pkgNameVer
          callProcess $
            CP { cwd          = "."
               , prog         = AbsPath ghcPath
               , args         = setupArgs
-              , extraPATH    = []
-              , extraEnvVars = []
+              , extraPATH    = binDir
+              , extraEnvVars = setupDepDataDirs
               , sem          = noSem
               }
 
@@ -148,7 +166,7 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- registered in the package database.
 buildUnit :: Verbosity
           -> Compiler
-          -> BuildPaths ForBuild -- ^ Overall Build directory structure.
+          -> BuildPaths ForBuild -- ^ Overall build directory structure.
           -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
           -> PkgDir     ForBuild -- ^ This package's directory (see 'getPkgDir').
           -> UnitArgs            -- ^ Extra arguments for this unit.
@@ -157,7 +175,7 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
-          ( BuildPaths { installDir, prefix, destDir } )
+          paths@( BuildPaths { installDir, prefix, destDir } )
           ( PkgDbDirsForBuild
             { tempPkgDbDir
             , finalPkgDbDir
@@ -179,22 +197,20 @@ buildUnit verbosity
     in do
       scriptCfg <- askScriptConfig
 
-      -- Specify the data directories for all dependencies,
-      -- including executable dependencies (see (**)).
-      -- This is important so that e.g. 'happy' can find its datadir.
-      let env =
-            [ ( mangledPkgName depName <> "_datadir"
-              , quoteArg scriptCfg $
-                installDir </> "share" </> Text.unpack (pkgNameVersion depName depVer) )
-            | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
-            , let dep     = lookupDependency unit depUnitId plan
-                  depName = planUnitPkgName dep
-                  depVer  = planUnitVersion dep
-            ]
+          -- Add the output binary directory to PATH, to satisfy executable
+          -- dependencies during the build.
+      let binDir = [ quoteArg scriptCfg $ installDir </> "bin" ]
 
-      -- Add the output binary directory to PATH, to satisfy executable
-      -- dependencies during the build.
-      let path = [ quoteArg scriptCfg $ installDir </> "bin" ]
+          -- Specify the data directories for all dependencies,
+          -- including executable dependencies (see (**)).
+          -- This is important so that e.g. 'happy' can find its datadir.
+          depDataDirs =
+            dataDirs scriptCfg paths
+              [ dep_cu
+              | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
+              , let dep = lookupDependency unit depUnitId plan
+              , dep_cu <- maybeToList $ configuredUnitMaybe dep
+              ]
 
       -- Configure
       let flagsArg = case puFlags unit of
@@ -207,6 +223,9 @@ buildUnit verbosity
             -- Set a different build directory for each unit,
             -- to avoid clashes when building multiple units from the same
             -- package concurrently.
+
+            -- NB: make sure to update the readme after changing
+            -- the arguments that are passed here.
           configureArgs = [ "--with-compiler", quoteArg scriptCfg ghcPath
                           , "--prefix", quoteArg scriptCfg prefix
                           , "--cid=" ++ Text.unpack (unUnitId $ Configured.puId unit)
@@ -227,12 +246,12 @@ buildUnit verbosity
       logMessage verbosity Debug $
         "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
       callProcess $
-        CP { cwd  = pkgDir
-           , prog = setupExe
-           , args = "configure" : configureArgs
-           , extraPATH = path
-           , extraEnvVars = env
-           , sem = noSem
+        CP { cwd          = pkgDir
+           , prog         = setupExe
+           , args         = "configure" : configureArgs
+           , extraPATH    = binDir
+           , extraEnvVars = depDataDirs -- Not sure this is needed for 'Setup configure'.
+           , sem          = noSem
            }
 
       -- Build
@@ -244,8 +263,8 @@ buildUnit verbosity
            , args         = [ "build"
                             , "--builddir=" ++ buildDir
                             , setupVerbosity verbosity]
-           , extraPATH    = path
-           , extraEnvVars = env
+           , extraPATH    = binDir
+           , extraEnvVars = depDataDirs
            , sem          = noSem
            }
 
@@ -497,3 +516,22 @@ runCwdExe ( ScriptConfig { scriptOutput, scriptStyle } )
       = ( <.> "exe" )
       | otherwise
       = id
+
+-- | An environment containing the data directory paths for the given units.
+dataDirs :: ScriptConfig
+         -> BuildPaths ForBuild
+         -> [ ConfiguredUnit ]
+         -> [ ( String, FilePath ) ]
+dataDirs scriptCfg ( BuildPaths { installDir } ) units =
+    [ ( mangledPkgName puPkgName <> "_datadir"
+      , quoteArg scriptCfg $
+          dataDir </> Text.unpack (pkgNameVersion puPkgName puVersion) )
+    | ConfiguredUnit { puPkgName, puVersion } <- units ]
+  where
+    dataDir =
+      case scriptStyle scriptCfg of
+        WinStyle   -> installDir
+        PosixStyle -> installDir </> "share"
+      -- NB: this is the default value of 'datadir'.
+      -- If we want the user to be able to specify 'datadir', we should
+      -- make it into an explicit argument, like 'prefix' & 'destdir'.
