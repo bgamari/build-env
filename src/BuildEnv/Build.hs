@@ -361,7 +361,7 @@ buildPlan verbosity workDir
           userUnitArgs
           cabalPlan
   = do
-    let BuildPaths { compiler, prefix, destDir, installDir }
+    let paths@( BuildPaths { compiler, prefix, destDir, installDir } )
          = buildPaths pathsForBuild
     -- Create the temporary package database, if it doesn't already exist.
     -- We also create the final installation package database,
@@ -407,19 +407,19 @@ buildPlan verbosity workDir
 
         -- Setup the package for this unit.
         unitSetupScript :: ConfiguredUnit -> IO BuildScript
-        unitSetupScript pu@(ConfiguredUnit { puSetupDepends }) = do
+        unitSetupScript pu = do
           let pkgDirForPrep  = getPkgDir workDir pathsForPrep  pu
               pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           setupPackage verbosity compiler
-            pkgDbDirsForBuild pkgDirForPrep pkgDirForBuild
-            puSetupDepends
+            paths pkgDbDirsForBuild pkgDirForPrep pkgDirForBuild
+            depMap pu
 
         -- Build and install this unit.
         unitBuildScript :: ConfiguredUnit -> BuildScript
         unitBuildScript pu =
           let pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           in buildUnit verbosity compiler
-                (buildPaths pathsForBuild) pkgDbDirsForBuild pkgDirForBuild
+                paths pkgDbDirsForBuild pkgDirForBuild
                 (userUnitArgs pu)
                 depMap pu
 

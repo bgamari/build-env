@@ -470,9 +470,8 @@ build = do
     optHaddockArgs :: Parser ( Maybe ( ConfiguredUnit -> Args ) )
     optHaddockArgs = do
       doHaddock <-
-        bool False True <$>
-          switch (  long "haddock"
-                 <> help "Generate haddock documentation" )
+        switch (  long "haddock"
+               <> help "Generate haddock documentation" )
       args <- many $
         option str (  long "haddock-arg"
                    <> help "Pass argument to 'Setup haddock'"
