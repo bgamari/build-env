@@ -185,7 +185,7 @@ buildUnit verbosity
       let env =
             [ ( mangledPkgName depName <> "_datadir"
               , quoteArg scriptCfg $
-                installDir </> Text.unpack (pkgNameVersion depName depVer) )
+                installDir </> "share" </> Text.unpack (pkgNameVersion depName depVer) )
             | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
             , let dep     = lookupDependency unit depUnitId plan
                   depName = planUnitPkgName dep
