@@ -279,8 +279,8 @@ buildUnit verbosity
                               , "--builddir=" ++ buildDir
                               , setupVerbosity verbosity ]
                                 ++ userHaddockArgs
-             , extraPATH    = []
-             , extraEnvVars = []
+             , extraPATH    = binDir
+             , extraEnvVars = depDataDirs
              , sem          = noSem
              }
 
