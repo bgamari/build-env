@@ -8,6 +8,10 @@
 -- expected by the command-line interface of @build-env@.
 module BuildEnv.Options where
 
+-- containers
+import Data.Set
+  ( Set )
+
 -- build-env
 import BuildEnv.CabalPlan
 import BuildEnv.Config
@@ -132,6 +136,9 @@ data Build
       -- ^ The build plan to follow.
     , buildStrategy   :: BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
+    , mbOnlyDepsOf    :: Maybe ( Set PkgName )
+      -- ^ @Just pkgs@ <=> only build @pkgs@ (and their dependencies).
+      --   @Nothing@ <=> build all units in the build plan.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
       -- ^ Extra per-unit arguments.
     }
