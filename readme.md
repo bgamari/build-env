@@ -12,6 +12,7 @@ in hermetic build environments.
 
 - [Example](#example)
 - [Commands](#commands)
+- [What does `build-env` do?](#what-does-build-env-do)
 - [Deferred builds](#deferred-builds)
 - [Bootstrapping](#bootstrapping)
   - [Bootstrap arguments](#bootstrap-arguments)
