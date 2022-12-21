@@ -34,6 +34,9 @@ module BuildEnv.Config
   , quietMsg, normalMsg, verboseMsg, debugMsg
   , ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
 
+    -- * Reporting progress
+  , Counter(..)
+
     -- * OS specifics
   , Style(..), hostStyle
   , pATHSeparator
@@ -45,6 +48,8 @@ import Control.Monad
   ( when )
 import Data.Kind
   ( Type )
+import Data.IORef
+  ( IORef )
 import Data.Word
   ( Word16 )
 import System.IO
@@ -299,6 +304,18 @@ cabalVerbosity (Verbosity _) = "-v3"
 ghcVerbosity    = cabalVerbosity
 ghcPkgVerbosity = cabalVerbosity
 setupVerbosity  = cabalVerbosity
+
+--------------------------------------------------------------------------------
+-- Reporting progress.
+
+-- | A counter to measure progress, as units are compiled.
+data Counter =
+  Counter
+    { counterRef  :: !( IORef Word )
+      -- ^ The running count.
+    , counterMax :: !Word
+      -- ^ The maximum that we're counting up to.
+    }
 
 --------------------------------------------------------------------------------
 -- Posix/Windows style differences.

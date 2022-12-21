@@ -30,10 +30,7 @@ module BuildEnv.Script
     -- ** Individual build steps
   , BuildStep(..), BuildSteps
   , step
-  , callProcess, createDir, logMessage
-
-    -- *** Reporting progress
-  , Counter(..), reportProgress
+  , callProcess, createDir, logMessage, reportProgress
 
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
@@ -42,10 +39,12 @@ module BuildEnv.Script
   ) where
 
 -- base
+import Control.Monad
+  ( when )
 import Data.Foldable
   ( traverse_, foldl', for_ )
 import Data.IORef
-  ( IORef, atomicModifyIORef' )
+  ( atomicModifyIORef' )
 import Data.Monoid
   ( Ap(..) )
 import Data.String
@@ -70,8 +69,8 @@ import Control.Monad.Trans.Writer.CPS
 
 -- build-env
 import BuildEnv.Config
-  ( Verbosity
-  , Style(..), hostStyle
+  ( Verbosity(..), Counter(..), Style(..)
+  , hostStyle
   )
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO )
@@ -122,16 +121,9 @@ data BuildStep
   | LogMessage  String
   -- | Report one unit of progress.
   | ReportProgress
-
-
--- | A counter to measure progress, as units are compiled.
-data Counter =
-  Counter
-    { counterRef  :: !( IORef Word )
-      -- ^ The running count.
-    , counterMax :: !Word
-      -- ^ The maximum that we're counting up to.
-    }
+      { outputProgress :: Bool
+        -- ^ Whether to log the progress to @stdout@.
+      }
 
 -- | Declare a build step.
 step :: BuildStep -> BuildScript
@@ -154,8 +146,8 @@ logMessage v msg_v msg
   = return ()
 
 -- | Report one unit of progress.
-reportProgress :: BuildScript
-reportProgress = step ReportProgress
+reportProgress :: Verbosity -> BuildScript
+reportProgress v = step ( ReportProgress { outputProgress = v > Quiet } )
 
 --------------------------------------------------------------------------------
 -- Configuration
@@ -252,21 +244,23 @@ executeBuildStep :: Maybe Counter
                  -> BuildStep
                  -> IO ()
 executeBuildStep mbCounter = \case
-  CallProcess cp  -> callProcessInIO cp
+  CallProcess cp  -> callProcessInIO mbCounter cp
   CreateDir   dir -> createDirectoryIfMissing True dir
   LogMessage  msg -> do { putStrLn msg ; hFlush stdout }
-  ReportProgress  -> for_ mbCounter \ counter -> do
-    completed <-
-      atomicModifyIORef' ( counterRef counter )
-        ( \ x -> let !x' = x+1 in (x',x') )
-    let
-      txt = "## " <> show completed <> " of " <> show ( counterMax counter ) <> " ##"
-      n = length txt
-    putStrLn $ unlines
-      [ ""
-      , " " <> replicate n '#'
-      , " " <> txt
-      , " " <> replicate n '#' ]
+  ReportProgress { outputProgress } ->
+    for_ mbCounter \ counter -> do
+      completed <-
+        atomicModifyIORef' ( counterRef counter )
+          ( \ x -> let !x' = x+1 in (x',x') )
+      when outputProgress do
+        let
+          txt = "## " <> show completed <> " of " <> show ( counterMax counter ) <> " ##"
+          n = length txt
+        putStrLn $ unlines
+          [ ""
+          , " " <> replicate n '#'
+          , " " <> txt
+          , " " <> replicate n '#' ]
 
 ----------------
 -- Shell script
@@ -297,13 +291,19 @@ stepScript scriptCfg = \case
     [ "mkdir -p " <> q dir ]
   LogMessage str ->
     [ "echo " <> q str ]
-  ReportProgress ->
+  ReportProgress { outputProgress } ->
     case scriptTotal scriptCfg of
-      Nothing  -> []
-      Just tot ->
-        [ Text.pack $ "printf \"" <> txt <> "\" $((++buildEnvProgress))" ]
+      Nothing
+        -> []
+      Just tot
+        | outputProgress
+        -> [ Text.pack $ "printf \"" <> txt <> "\" $((++buildEnvProgress))" ]
+        | otherwise
+        -> [ "((++buildEnvProgress))" ]
+          -- Still increment the progress variable, as we use this variable
+          -- to report progress upon failure.
         where
-          n = min 1 (length $ show tot)
+          n = length $ show tot
           l = 2 * n + 10
           txt = "\\n " <> replicate l '#' <> "\\n "
                       <> "## %0" <> show n <> "d of " <> show tot <> " ##" <> "\\n "
@@ -322,8 +322,11 @@ stepScript scriptCfg = \case
     , "then true"
     , "else"
     , "  echo \"callProcess failed with non-zero exit code. Command:\""
-    , "  echo " <> cmd
-    , "  exit \"${" <> resVar <> "}\""
+    , "  echo \"  > \" " <> cmd
+    , "  echo \"CWD = \" " <> q cwd ]
+    ++ progressReport
+    ++
+    [ "  exit \"${" <> resVar <> "}\""
     , "fi" ]
     where
       cmd :: Text
@@ -361,6 +364,13 @@ stepScript scriptCfg = \case
                         <> Text.pack var
                         <> "=" <> Text.pack val <> " ; \\"
                                    -- (already quoted)
+
+      progressReport :: [Text]
+      progressReport =
+        case scriptTotal scriptCfg of
+          Nothing  -> []
+          Just tot ->
+            [ "  echo \"After ${buildEnvProgress} of " <> Text.pack (show tot) <> "\"" ]
 
 ----
 -- Helper to check that environment variables are set as expected.

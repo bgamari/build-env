@@ -28,6 +28,8 @@ import Control.Concurrent.QSem
   ( QSem, newQSem, signalQSem, waitQSem )
 import Data.List
   ( intercalate )
+import Data.IORef
+  ( readIORef )
 import System.Environment
   ( getEnvironment )
 import System.Exit
@@ -61,8 +63,7 @@ import System.IO.Temp
 
 -- build-env
 import BuildEnv.Config
-  ( AsyncSem(..)
-  , Args, TempDirPermanence(..)
+  ( AsyncSem(..), Args, TempDirPermanence(..), Counter(..)
   , pATHSeparator, hostStyle
   )
 
@@ -101,8 +102,13 @@ data CallProcess
 -- Crashes if the process returns with non-zero exit code.
 --
 -- See 'CallProcess' for a description of the options.
-callProcessInIO :: HasCallStack => CallProcess -> IO ()
-callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
+callProcessInIO :: HasCallStack
+                => Maybe Counter
+                    -- ^ Optional counter. Used when the command fails,
+                    -- to report the progress that has been made so far.
+                -> CallProcess
+                -> IO ()
+callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
   absProg <-
     case prog of
       AbsPath p -> return p
@@ -136,9 +142,16 @@ callProcessInIO ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
       let argsStr
            | null args = ""
            | otherwise = " " ++ unwords args
-      error ( "command failed with exit code " ++ show i ++ ":\n"
-            ++ "  > " ++ absProg ++ argsStr ++ "\n"
-            ++ "CWD = " ++ cwd )
+      progressReport <-
+        case mbCounter of
+          Nothing -> return []
+          Just ( Counter { counterRef, counterMax } ) -> do
+            progress <- readIORef counterRef
+            return $ [ "After " <> show progress <> " of " <> show counterMax ]
+      error . unlines $
+        [ "callProcess failed with non-zero exit code " ++ show i ++ "."
+        , "  > " ++ absProg ++ argsStr
+        , "CWD = " ++ cwd ] ++ progressReport
 
 -- | Add filepaths to the given key in a key/value environment.
 augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String
