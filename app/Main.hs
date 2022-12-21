@@ -5,6 +5,8 @@ import Control.Monad
   ( guard )
 import Data.Foldable
   ( for_ )
+import System.IO
+  ( BufferMode(..), hSetBuffering, stdout )
 
 -- bytestring
 import qualified Data.ByteString.Lazy as Lazy.ByteString
@@ -40,6 +42,7 @@ main = do
   currentDir <- getCurrentDirectory
   Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
     <- runOptionsParser currentDir
+  hSetBuffering stdout $ BlockBuffering Nothing
   withCurrentDirectory workDir $
     case mode of
       PlanMode { planModeInputs, planOutput } -> do

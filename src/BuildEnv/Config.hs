@@ -47,6 +47,8 @@ import Data.Kind
   ( Type )
 import Data.Word
   ( Word16 )
+import System.IO
+  ( hFlush, stdout )
 
 -- directory
 import System.Directory
@@ -275,26 +277,28 @@ pattern Verbose = Verbosity 2
 pattern Debug   = Verbosity 3
 
 quietMsg, normalMsg, verboseMsg, debugMsg :: Verbosity -> Text -> IO ()
-quietMsg   v msg = when (v >= Quiet  ) $ Text.putStrLn msg
-normalMsg  v msg = when (v >= Normal ) $ Text.putStrLn msg
-verboseMsg v msg = when (v >= Verbose) $ Text.putStrLn msg
-debugMsg   v msg = when (v >= Debug  ) $ Text.putStrLn msg
+quietMsg   v msg = when (v >= Quiet  ) $ putMsg msg
+normalMsg  v msg = when (v >= Normal ) $ putMsg msg
+verboseMsg v msg = when (v >= Verbose) $ putMsg msg
+debugMsg   v msg = when (v >= Debug  ) $ putMsg msg
+
+-- | Write the text to @stdout@, and flush.
+putMsg :: Text -> IO ()
+putMsg msg = do
+  Text.putStrLn msg
+  hFlush stdout
 
 ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
   :: Verbosity -> String
-ghcVerbosity (Verbosity i)
-  | i <= 1
-  = "-v0"
-  | otherwise
-  = "-v1"
-ghcPkgVerbosity = ghcVerbosity
-setupVerbosity  = ghcVerbosity
 cabalVerbosity (Verbosity i)
   | i <= 1
   = "-v0"
 cabalVerbosity (Verbosity 2) = "-v1"
 cabalVerbosity (Verbosity 3) = "-v2"
 cabalVerbosity (Verbosity _) = "-v3"
+ghcVerbosity    = cabalVerbosity
+ghcPkgVerbosity = cabalVerbosity
+setupVerbosity  = cabalVerbosity
 
 --------------------------------------------------------------------------------
 -- Posix/Windows style differences.
