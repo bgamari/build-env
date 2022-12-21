@@ -103,7 +103,6 @@ import qualified BuildEnv.CabalPlan as Configured
 import BuildEnv.Config
 import BuildEnv.Script
   ( BuildScript, ScriptOutput(..), ScriptConfig(..)
-  , Counter(..)
   , emptyBuildScript
   , executeBuildScript, script
   , createDir, logMessage
@@ -155,7 +154,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
       Text.unlines $ "cabal" : map ( ("  " <>) . Text.pack ) cabalBuildArgs
-    callProcessInIO $
+    callProcessInIO Nothing $
       CP { cwd          = dir
          , prog         = AbsPath $ cabalPath cabal
          , args         = cabalBuildArgs
@@ -328,7 +327,7 @@ cabalFetch verbosity cabal root pkgNmVer = do
                  [ "get"
                  , pkgNmVer
                  , cabalVerbosity verbosity ]
-    callProcessInIO $
+    callProcessInIO Nothing $
       CP { cwd          = root
          , prog         = AbsPath $ cabalPath cabal
          , args

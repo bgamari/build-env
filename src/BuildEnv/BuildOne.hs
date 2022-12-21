@@ -351,7 +351,7 @@ buildUnit verbosity
         _notALib -> return ()
 
       logMessage verbosity Normal $ "Finished building " <> unitPrintableName
-      reportProgress
+      reportProgress verbosity
 
 -- | The argument @-package-id PKG_ID@.
 unitIdArg :: UnitId -> String
