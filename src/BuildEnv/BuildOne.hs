@@ -219,7 +219,8 @@ buildUnit verbosity
               -> []
               | otherwise
               -> [ "--flags=" ++ quoteArg scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
-          buildDir = "dist" </> thisUnitId
+          buildDir = quoteArg scriptCfg -- Quote to escape \ on Windows.
+                   $ "dist" </> thisUnitId
             -- Set a different build directory for each unit,
             -- to avoid clashes when building multiple units from the same
             -- package concurrently.
