@@ -50,6 +50,8 @@ import Data.Monoid
   ( Ap(..) )
 import Data.String
   ( IsString(..) )
+import System.IO
+  ( hFlush, stdout )
 
 -- directory
 import System.Directory
@@ -116,7 +118,7 @@ data BuildStep
   = CallProcess CallProcess
   -- | Create the given directory.
   | CreateDir   FilePath
-  -- | Log a message.
+  -- | Log a message to @stdout@.
   | LogMessage  String
   -- | Report one unit of progress.
   | ReportProgress
@@ -252,7 +254,7 @@ executeBuildStep :: Maybe Counter
 executeBuildStep mbCounter = \case
   CallProcess cp  -> callProcessInIO cp
   CreateDir   dir -> createDirectoryIfMissing True dir
-  LogMessage  msg -> putStrLn msg
+  LogMessage  msg -> do { putStrLn msg ; hFlush stdout }
   ReportProgress  -> for_ mbCounter \ counter -> do
     completed <-
       atomicModifyIORef' ( counterRef counter )
