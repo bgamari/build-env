@@ -40,6 +40,8 @@ import Data.Char
   ( isSpace )
 import Data.Foldable
   ( for_, toList )
+import Data.IORef
+  ( newIORef )
 import Data.Maybe
   ( mapMaybe, maybeToList, isNothing )
 import Data.String
@@ -101,6 +103,7 @@ import qualified BuildEnv.CabalPlan as Configured
 import BuildEnv.Config
 import BuildEnv.Script
   ( BuildScript, ScriptOutput(..), ScriptConfig(..)
+  , Counter(..)
   , emptyBuildScript
   , executeBuildScript, script
   , createDir, logMessage
@@ -433,68 +436,82 @@ buildPlan verbosity workDir
           logMessage verbosity Normal $ "=== BUILD SUCCEEDED ==="
 
     case buildStrat of
-      Execute (Async sem) -> do
-        normalMsg verbosity $
-          "\nBuilding and installing units asynchronously with " <> semDescription sem
-        executeBuildScript preparation
-        AbstractSem { withAbstractSem } <- newAbstractSem sem
-        (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
-          let -- Compile the Setup script of the package the unit belongs to.
-              -- (This should happen only once per package.)
-              doPkgSetupAsync :: ConfiguredUnit -> IO ()
-              doPkgSetupAsync cu@( ConfiguredUnit { puSetupDepends } ) = do
+      Execute runStrat -> do
 
-                -- Wait for the @setup-depends@ units.
-                for_ puSetupDepends \ setupDepId ->
-                  for_ (unitAsyncs Map.!? setupDepId) wait
+        -- Initialise the "units built" counter.
+        unitsBuiltCounterRef <- newIORef 0
+        let unitsBuiltCounter
+              = Just $
+                Counter { counterRef = unitsBuiltCounterRef
+                        , counterMax = nbUnitsToBuild }
 
-                -- Setup the package.
-                withAbstractSem do
-                  setupScript <- unitSetupScript cu
-                  executeBuildScript setupScript
+        case runStrat of
 
-              -- Configure, build and install the unit.
-              doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
-              doUnitAsync ( pu, _didSetup ) = do
+          Async sem -> do
 
-                let nm  = Configured.puPkgName pu
-                    ver = Configured.puVersion pu
+            normalMsg verbosity $
+              "\nBuilding and installing units asynchronously with " <> semDescription sem
+            executeBuildScript unitsBuiltCounter preparation
+            AbstractSem { withAbstractSem } <- newAbstractSem sem
+            (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
-                -- Wait for the package to have been setup.
-                wait $ pkgAsyncs Map.! (nm, ver)
+              let -- Compile the Setup script of the package the unit belongs to.
+                  -- (This should happen only once per package.)
+                  doPkgSetupAsync :: ConfiguredUnit -> IO ()
+                  doPkgSetupAsync cu@( ConfiguredUnit { puSetupDepends } ) = do
 
-                -- Wait until we have built the units we depend on.
-                for_ (unitDepends pu) \ depUnitId ->
-                  for_ (unitAsyncs Map.!? depUnitId) wait
+                    -- Wait for the @setup-depends@ units.
+                    for_ puSetupDepends \ setupDepId ->
+                      for_ (unitAsyncs Map.!? setupDepId) wait
 
-                -- Build the unit!
-                withAbstractSem $
-                  executeBuildScript $ unitBuildScript pu
+                    -- Setup the package.
+                    withAbstractSem do
+                      setupScript <- unitSetupScript cu
+                      executeBuildScript unitsBuiltCounter setupScript
 
-          -- Kick off setting up the packages...
-          finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
-          -- ... and building the units.
-          finalUnitAsyncs <- for unitMap (async . doUnitAsync)
-          return (finalPkgAsyncs, finalUnitAsyncs)
-        mapM_ wait unitAsyncs
-        executeBuildScript finish
+                  -- Configure, build and install the unit.
+                  doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
+                  doUnitAsync ( pu, _didSetup ) = do
 
-      Execute TopoSort -> do
-        normalMsg verbosity "\nBuilding and installing units sequentially.\n\
-                            \NB: pass -j<N> for increased parallelism."
-        executeBuildScript preparation
-        for_ unitsToBuild \ ( cu, didSetup ) -> do
-          when (isNothing didSetup) $
-            unitSetupScript cu >>= executeBuildScript
-          executeBuildScript (unitBuildScript cu)
-        executeBuildScript finish
+                    let nm  = Configured.puPkgName pu
+                        ver = Configured.puVersion pu
+
+                    -- Wait for the package to have been setup.
+                    wait $ pkgAsyncs Map.! (nm, ver)
+
+                    -- Wait until we have built the units we depend on.
+                    for_ (unitDepends pu) \ depUnitId ->
+                      for_ (unitAsyncs Map.!? depUnitId) wait
+
+                    -- Build the unit!
+                    withAbstractSem $
+                      executeBuildScript unitsBuiltCounter $ unitBuildScript pu
+
+              -- Kick off setting up the packages...
+              finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
+              -- ... and building the units.
+              finalUnitAsyncs <- for unitMap (async . doUnitAsync)
+              return (finalPkgAsyncs, finalUnitAsyncs)
+            mapM_ wait unitAsyncs
+            executeBuildScript unitsBuiltCounter finish
+
+          TopoSort -> do
+            normalMsg verbosity "\nBuilding and installing units sequentially.\n\
+                                \NB: pass -j<N> for increased parallelism."
+            executeBuildScript unitsBuiltCounter preparation
+            for_ unitsToBuild \ ( cu, didSetup ) -> do
+              when (isNothing didSetup) $
+                unitSetupScript cu >>= executeBuildScript unitsBuiltCounter
+              executeBuildScript unitsBuiltCounter (unitBuildScript cu)
+            executeBuildScript unitsBuiltCounter finish
 
       Script { scriptPath = fp, useVariables } -> do
         let scriptConfig :: ScriptConfig
             scriptConfig =
               ScriptConfig { scriptOutput = Shell { useVariables }
-                           , scriptStyle  = hostStyle }
+                           , scriptStyle  = hostStyle
+                           , scriptTotal  = Just nbUnitsToBuild }
 
         normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
         buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
@@ -518,6 +535,9 @@ buildPlan verbosity workDir
     unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
     unitsToBuild
       = tagUnits $ sortPlan mbOnlyBuildDepsOf cabalPlan
+
+    nbUnitsToBuild :: Word
+    nbUnitsToBuild = fromIntegral $ length unitsToBuild
 
     unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
     unitMap = Lazy.Map.fromList
