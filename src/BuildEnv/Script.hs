@@ -32,6 +32,9 @@ module BuildEnv.Script
   , step
   , callProcess, createDir, logMessage
 
+    -- *** Reporting progress
+  , Counter(..), reportProgress
+
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
   , quoteArg
@@ -40,7 +43,9 @@ module BuildEnv.Script
 
 -- base
 import Data.Foldable
-  ( traverse_, foldl' )
+  ( traverse_, foldl', for_ )
+import Data.IORef
+  ( IORef, atomicModifyIORef' )
 import Data.Monoid
   ( Ap(..) )
 import Data.String
@@ -113,6 +118,18 @@ data BuildStep
   | CreateDir   FilePath
   -- | Log a message.
   | LogMessage  String
+  -- | Report one unit of progress.
+  | ReportProgress
+
+
+-- | A counter to measure progress, as units are compiled.
+data Counter =
+  Counter
+    { counterRef  :: !( IORef Word )
+      -- ^ The running count.
+    , counterMax :: !Word
+      -- ^ The maximum that we're counting up to.
+    }
 
 -- | Declare a build step.
 step :: BuildStep -> BuildScript
@@ -133,6 +150,10 @@ logMessage v msg_v msg
   = step $ LogMessage msg
   | otherwise
   = return ()
+
+-- | Report one unit of progress.
+reportProgress :: BuildScript
+reportProgress = step ReportProgress
 
 --------------------------------------------------------------------------------
 -- Configuration
@@ -166,14 +187,20 @@ data ScriptConfig
     --  - add @./@ to run an executable in the current working directory?
   , scriptStyle :: !Style
     -- ^ Whether to use Posix or Windows style conventions. See 'Style'.
+
+  , scriptTotal :: !(Maybe Word)
+    -- ^ Optional: the total number of units we are building;
+    -- used to report progress.
   }
 
 -- | Configure a script to run on the host (in @IO@).
-hostRunCfg :: ScriptConfig
-hostRunCfg =
+hostRunCfg :: Maybe Word -- ^ Optional: total to report progress against.
+           -> ScriptConfig
+hostRunCfg mbTotal =
   ScriptConfig
     { scriptOutput = Run
-    , scriptStyle  = hostStyle }
+    , scriptStyle  = hostStyle
+    , scriptTotal  = mbTotal }
 
 -- | Quote a string, to avoid spaces causing the string
 -- to be interpreted as multiple arguments.
@@ -210,15 +237,34 @@ quoteArg ( ScriptConfig { scriptOutput } ) =
 -- IO
 
 -- | Execute a 'BuildScript' in the 'IO' monad.
-executeBuildScript :: BuildScript -> IO ()
-executeBuildScript =
-  traverse_ executeBuildStep . buildSteps hostRunCfg
+executeBuildScript :: Maybe Counter -- ^ Optional counter to use to report progress.
+                   -> BuildScript   -- ^ The build script to execute.
+                   -> IO ()
+executeBuildScript counter
+  = traverse_  ( executeBuildStep counter )
+  . buildSteps ( hostRunCfg $ fmap counterMax counter )
 
 -- | Execute a single 'BuildStep' in the 'IO' monad.
-executeBuildStep :: BuildStep -> IO ()
-executeBuildStep (CallProcess cp ) = callProcessInIO cp
-executeBuildStep (CreateDir   dir) = createDirectoryIfMissing True dir
-executeBuildStep (LogMessage  msg) = putStrLn msg
+executeBuildStep :: Maybe Counter
+                     -- ^ Optional counter to use to report progress.
+                 -> BuildStep
+                 -> IO ()
+executeBuildStep mbCounter = \case
+  CallProcess cp  -> callProcessInIO cp
+  CreateDir   dir -> createDirectoryIfMissing True dir
+  LogMessage  msg -> putStrLn msg
+  ReportProgress  -> for_ mbCounter \ counter -> do
+    completed <-
+      atomicModifyIORef' ( counterRef counter )
+        ( \ x -> let !x' = x+1 in (x',x') )
+    let
+      txt = "## " <> show completed <> " of " <> show ( counterMax counter ) <> " ##"
+      n = length txt
+    putStrLn $ unlines
+      [ ""
+      , " " <> replicate n '#'
+      , " " <> txt
+      , " " <> replicate n '#' ]
 
 ----------------
 -- Shell script
@@ -226,20 +272,42 @@ executeBuildStep (LogMessage  msg) = putStrLn msg
 -- | Obtain the textual contents of a build script.
 script :: ScriptConfig -> BuildScript -> Text
 script scriptCfg buildScript =
-  Text.unlines ( header ++ concatMap stepScript ( buildSteps scriptCfg buildScript ) )
+  Text.unlines ( header ++ concatMap ( stepScript scriptCfg ) ( buildSteps scriptCfg buildScript ) )
   where
-    header, varsHelper :: [ Text ]
-    header = [ "#!/bin/bash" , "" ] ++ varsHelper
+    header, varsHelper, progressVars :: [ Text ]
+    header = [ "#!/bin/bash" , "" ] ++ varsHelper ++ progressVars
     varsHelper
       | Shell { useVariables } <- scriptOutput scriptCfg
       , useVariables
       = variablesHelper
       | otherwise
       = []
+    progressVars =
+      case scriptTotal scriptCfg of
+        Nothing -> []
+        Just {} ->
+          [ "buildEnvProgress=0" ]
 
 -- | The underlying script of a build step.
-stepScript :: BuildStep -> [ Text ]
-stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
+stepScript :: ScriptConfig -> BuildStep -> [ Text ]
+stepScript scriptCfg = \case
+  CreateDir dir ->
+    [ "mkdir -p " <> q dir ]
+  LogMessage str ->
+    [ "echo " <> q str ]
+  ReportProgress ->
+    case scriptTotal scriptCfg of
+      Nothing  -> []
+      Just tot ->
+        [ Text.pack $ "printf \"" <> txt <> "\" $((++buildEnvProgress))" ]
+        where
+          n = min 1 (length $ show tot)
+          l = 2 * n + 10
+          txt = "\\n " <> replicate l '#' <> "\\n "
+                      <> "## %0" <> show n <> "d of " <> show tot <> " ##" <> "\\n "
+                      <> replicate l '#' <> "\\n"
+
+  CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ->
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
     [ "( cd " <> q cwd <> " ; \\" ]
@@ -255,46 +323,42 @@ stepScript ( CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ) =
     , "  echo " <> cmd
     , "  exit \"${" <> resVar <> "}\""
     , "fi" ]
-  where
-    cmd :: Text
-    cmd = q ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
-      --         (1)                                         (2)
-      --
-      -- (1)
-      --   In shell scripts, we always change directory before running the
-      --   program. As the program path is either absolute or relative to @cwd@,
-      --   we don't need to modify the program path.
-      --
-      -- (2)
-      --   Don't quote the arguments: arguments which needed quoting will have
-      --   been quoted using the 'quoteArg' function.
-      --
-      --   This allows users to pass multiple arguments using variables:
-      --
-      --   > myArgs="arg1 arg2 arg3"
-      --   > Setup configure $myArgs
-      --
-      --   by passing @$myArgs@ as a @Setup configure@ argument.
-    resVar :: Text
-    resVar = "lastExitCode"
-    mbUpdatePath :: [Text]
-    mbUpdatePath
-      | null extraPATH
-      = []
-      | otherwise
-      = [  "  export PATH=$PATH:"
-        <> Text.intercalate ":" (map Text.pack extraPATH) -- (already quoted)
-        <> " ; \\" ]
+    where
+      cmd :: Text
+      cmd = q ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
+        --         (1)                                         (2)
+        --
+        -- (1)
+        --   In shell scripts, we always change directory before running the
+        --   program. As the program path is either absolute or relative to @cwd@,
+        --   we don't need to modify the program path.
+        --
+        -- (2)
+        --   Don't quote the arguments: arguments which needed quoting will have
+        --   been quoted using the 'quoteArg' function.
+        --
+        --   This allows users to pass multiple arguments using variables:
+        --
+        --   > myArgs="arg1 arg2 arg3"
+        --   > Setup configure $myArgs
+        --
+        --   by passing @$myArgs@ as a @Setup configure@ argument.
+      resVar :: Text
+      resVar = "buildEnvLastExitCode"
+      mbUpdatePath :: [Text]
+      mbUpdatePath
+        | null extraPATH
+        = []
+        | otherwise
+        = [  "  export PATH=$PATH:"
+          <> Text.intercalate ":" (map Text.pack extraPATH) -- (already quoted)
+          <> " ; \\" ]
 
-    mkEnvVar :: (String, String) -> Text
-    mkEnvVar (var,val) = "  export "
-                      <> Text.pack var
-                      <> "=" <> Text.pack val <> " ; \\"
-                                 -- (already quoted)
-stepScript (CreateDir dir) =
-  [ "mkdir -p " <> q dir ]
-stepScript (LogMessage str) =
-  [ "echo " <> q str ]
+      mkEnvVar :: (String, String) -> Text
+      mkEnvVar (var,val) = "  export "
+                        <> Text.pack var
+                        <> "=" <> Text.pack val <> " ; \\"
+                                   -- (already quoted)
 
 ----
 -- Helper to check that environment variables are set as expected.
