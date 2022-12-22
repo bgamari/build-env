@@ -137,6 +137,10 @@ transitive dependencies thereof.
 Note that `--only` only affects which packages are built; it does not change
 the computation of the build plan nor which packages are fetched.
 
+You can also resume a build where it left off by passing `--resume`; this will
+avoid rebuilding any of the units that have already been registed in the
+package database.
+
 ## Bootstrapping
 
 In the example from [§ Hermetic builds](#hermetic-builds), we ran

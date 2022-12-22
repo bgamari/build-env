@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
@@ -37,7 +38,7 @@ import Control.Monad
 import Control.Monad.Fix
   ( MonadFix(mfix) )
 import Data.Char
-  ( isSpace )
+  ( isAlphaNum, isSpace )
 import Data.Foldable
   ( for_, toList )
 import Data.IORef
@@ -85,6 +86,10 @@ import System.FilePath
   , isAbsolute
   )
 
+-- process
+import qualified System.Process as Process
+  ( readProcess )
+
 -- text
 import Data.Text
   ( Text )
@@ -110,6 +115,7 @@ import BuildEnv.Script
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
   , AbstractSem(..), noSem, newAbstractSem
+  , splitOn
   )
 
 --------------------------------------------------------------------------------
@@ -341,9 +347,6 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
 -- by running their @Setup@ scripts. Libraries will be registered
 -- into a local package database at @<install-dir>/package.conf@.
---
--- Note: this function will fail if one of the packages has already been
--- registered in the package database.
 buildPlan :: Verbosity
           -> FilePath
               -- ^ Working directory
@@ -351,6 +354,13 @@ buildPlan :: Verbosity
           -> Paths ForPrep
           -> Paths ForBuild
           -> BuildStrategy
+          -> Bool
+             -- ^ @True@ <> resume a previously-started build,
+             -- skipping over units that were already built.
+             --
+             -- This function will fail if this argument is @False@
+             -- and one of the units has already been registered in the
+             -- package database.
           -> Maybe [ UnitId ]
              -- ^ @Just units@: only build @units@ and their transitive
              -- dependencies, instead of the full build plan.
@@ -363,6 +373,7 @@ buildPlan verbosity workDir
           pathsForPrep
           pathsForBuild
           buildStrat
+          resumeBuild
           mbOnlyBuildDepsOf
           userUnitArgs
           cabalPlan
@@ -374,12 +385,21 @@ buildPlan verbosity workDir
     -- but this happens later, in (*), as part of the build script itself.
     --
     -- See Note [Using two package databases] in BuildOne.
-    let PkgDbDirsForPrep { tempPkgDbDir } = getPkgDbDirsForPrep pathsForPrep
+    let pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir } )
+          = getPkgDbDirsForPrep pathsForPrep
     tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
-    when tempPkgDbExists $
-     removeDirectoryRecursive tempPkgDbDir
-       `catch` \ ( _ :: IOException ) -> return ()
-    createDirectoryIfMissing True tempPkgDbDir
+
+    if
+      | resumeBuild && not tempPkgDbExists
+      -> error $
+          "Cannot resume build: no package database at " <> tempPkgDbDir
+      | not resumeBuild
+      -> do when tempPkgDbExists $
+              removeDirectoryRecursive tempPkgDbDir
+                `catch` \ ( _ :: IOException ) -> return ()
+            createDirectoryIfMissing True tempPkgDbDir
+      | otherwise
+      -> return ()
 
     pkgDbDirsForBuild@( PkgDbDirsForBuild { finalPkgDbDir } )
       <- getPkgDbDirsForBuild pathsForBuild
@@ -390,7 +410,27 @@ buildPlan verbosity workDir
                    , "     destDir: " <> Text.pack destDir
                    , "  installDir: " <> Text.pack installDir ]
 
-    let -- Initial preparation: logging, and creating the final
+    mbAlreadyBuilt <-
+      if resumeBuild
+      then let prepComp = compilerForPrep $ buildPaths pathsForPrep
+           in Just <$> getInstalledUnits verbosity prepComp pkgDbDirsForPrep
+      else return Nothing
+
+    let -- Units to build, in dependency order.
+        unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
+        unitsToBuild
+           = tagUnits $ sortPlan mbAlreadyBuilt mbOnlyBuildDepsOf cabalPlan
+
+        nbUnitsToBuild :: Word
+        nbUnitsToBuild = fromIntegral $ length unitsToBuild
+
+        pkgMap :: Map (PkgName, Version) ConfiguredUnit
+        pkgMap = Lazy.Map.fromList
+          [ ((puPkgName, puVersion), cu)
+          | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
+          , isNothing didSetup ]
+
+        -- Initial preparation: logging, and creating the final
         -- package database.
         preparation :: BuildScript
         preparation = do
@@ -418,7 +458,7 @@ buildPlan verbosity workDir
               pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           setupPackage verbosity compiler
             paths pkgDbDirsForBuild pkgDirForPrep pkgDirForBuild
-            depMap pu
+            fullDepMap pu
 
         -- Build and install this unit.
         unitBuildScript :: ConfiguredUnit -> BuildScript
@@ -427,7 +467,7 @@ buildPlan verbosity workDir
           in buildUnit verbosity compiler
                 paths pkgDbDirsForBuild pkgDirForBuild
                 (userUnitArgs pu)
-                depMap pu
+                fullDepMap pu
 
         -- Close out the build.
         finish :: BuildScript
@@ -452,6 +492,13 @@ buildPlan verbosity workDir
             normalMsg verbosity $
               "\nBuilding and installing units asynchronously with " <> semDescription sem
             executeBuildScript unitsBuiltCounter preparation
+
+            let unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
+                unitMap =
+                  Lazy.Map.fromList
+                    [ (puId, pu)
+                    | pu@( ConfiguredUnit { puId }, _ ) <- unitsToBuild ]
+
             AbstractSem { withAbstractSem } <- newAbstractSem sem
             (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
 
@@ -524,55 +571,61 @@ buildPlan verbosity workDir
 
   where
 
-    pkgMap :: Map (PkgName, Version) ConfiguredUnit
-    pkgMap = Lazy.Map.fromList
-      [ ((puPkgName, puVersion), cu)
-      | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
-      , isNothing didSetup ]
-
-    -- Units to build, in dependency order.
-    unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
-    unitsToBuild
-      = tagUnits $ sortPlan mbOnlyBuildDepsOf cabalPlan
-
-    nbUnitsToBuild :: Word
-    nbUnitsToBuild = fromIntegral $ length unitsToBuild
-
-    unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
-    unitMap = Lazy.Map.fromList
-              [ (puId, pu)
-              | pu@( ConfiguredUnit { puId }, _ ) <- unitsToBuild ]
-
-    depMap :: Map UnitId PlanUnit
-    depMap = Map.fromList
+    -- This needs to have ALL units, as that's how we pass correct
+    -- Unit IDs for dependencies.
+    fullDepMap :: Map UnitId PlanUnit
+    fullDepMap = Map.fromList
               [ (planUnitUnitId pu, pu)
               | pu <- planUnits cabalPlan ]
 
 
 -- | Sort the units in a 'CabalPlan' in dependency order.
-sortPlan :: Maybe [ UnitId ]
+sortPlan :: Maybe ( Set UnitId )
+             -- ^ - @Just skip@ <=> skip these already-built units.
+             --   - @Nothing@ <=> don't skip any units.
+         -> Maybe [ UnitId ]
              -- ^ - @Just keep@ <=> only return units that belong
              --     to the transitive closure of @keep@.
              --   - @Nothing@ <=> return all units in the plan.
          -> CabalPlan
          -> [ConfiguredUnit]
-sortPlan mbOnlyDepsOf plan =
+sortPlan mbAlreadyBuilt mbOnlyDepsOf plan =
     onlyInteresting $ map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
   where
 
     onlyInteresting :: [ConfiguredUnit] -> [ConfiguredUnit]
-    onlyInteresting =
-      case mbOnlyDepsOf of
-        Nothing         -> id
-        Just onlyDepsOf ->
-          let reachableUnits :: Set UnitId
-              reachableUnits
-                = Set.fromList
-                $ map ( Configured.puId . fst3 . lookupVertex )
-                $ concatMap toList
-                $ Graph.dfs gr
-                $ mapMaybe mkVertex onlyDepsOf
-          in filter \ ( ConfiguredUnit { puId } ) -> puId `Set.member` reachableUnits
+    onlyInteresting
+      -- Fast path: don't filter out anything.
+      | isNothing mbAlreadyBuilt
+      , isNothing mbOnlyDepsOf
+      = id
+      | otherwise
+      = filter isInteresting
+
+      where
+        isInteresting :: ConfiguredUnit -> Bool
+        isInteresting cu@( ConfiguredUnit { puId } )
+          | not $ reachable cu
+          = False
+          | Just alreadyBuilt <- mbAlreadyBuilt
+          , puId `Set.member` alreadyBuilt
+          = False
+          | otherwise
+          = True
+
+        reachable :: ConfiguredUnit -> Bool
+        reachable =
+          case mbOnlyDepsOf of
+            Nothing -> const True
+            Just onlyDepsOf ->
+              let reachableUnits :: Set UnitId
+                  !reachableUnits
+                    = Set.fromList
+                    $ map ( Configured.puId . fst3 . lookupVertex )
+                    $ concatMap toList
+                    $ Graph.dfs gr
+                    $ mapMaybe mkVertex onlyDepsOf
+              in \ ( ConfiguredUnit { puId } ) -> puId `Set.member` reachableUnits
 
     fst3 :: (a,b,c) -> a
     fst3 (a,_,_) = a
@@ -597,3 +650,31 @@ tagUnits = go Map.empty
             ver = Configured.puVersion cu
       , ( mbUnit, newPkgs ) <- Map.insertLookupWithKey (\_ a _ -> a) (nm,ver) puId seenPkgs
       = (cu, mbUnit) : go newPkgs cus
+
+-- | Compute the set of @UnitId@s that already appear in the temporary
+-- package database, to avoid unnecessarily recompiling them.
+--
+-- TODO: this does not account for executables; these will be rebuilt
+-- no matter what.
+getInstalledUnits :: Verbosity -> Compiler -> PkgDbDirs ForPrep -> IO ( Set UnitId )
+getInstalledUnits verbosity ( Compiler { ghcPkgPath } ) ( PkgDbDirsForPrep { tempPkgDbDir } ) = do
+  pkgVerUnitIds <-
+    words <$>
+    Process.readProcess ( ghcPkgPath )
+      [ "list"
+      , ghcPkgVerbosity verbosity
+      , "--show-unit-ids", "--simple-output"
+      , "--package-db", tempPkgDbDir ]
+        -- TODO: allow user package databases too?
+      ""
+  return $ Set.fromList $ map parseUnitId pkgVerUnitIds
+  where
+    parseUnitId :: String -> UnitId
+    parseUnitId pkgVerUnitId =
+      case splitOn '-' pkgVerUnitId of
+        [_,_,unitId]
+          | all isAlphaNum unitId
+          -> UnitId $ Text.pack unitId
+        _ -> error . unlines $
+               [ "Could not parse installed units from " <> tempPkgDbDir
+               , "Unexpected unit " <> pkgVerUnitId ]

@@ -139,6 +139,8 @@ data Build
     , mbOnlyDepsOf    :: Maybe ( Set PkgName )
       -- ^ @Just pkgs@ <=> only build @pkgs@ (and their dependencies).
       --   @Nothing@ <=> build all units in the build plan.
+    , resumeBuild     :: Bool
+      -- ^ Whether to resume a previous build, or start from scratch again.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
       -- ^ Extra per-unit arguments.
     }

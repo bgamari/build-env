@@ -58,6 +58,7 @@ main = do
       BuildMode ( Build { buildBuildPlan
                         , buildFetch, buildStrategy
                         , buildRawPaths = rawPaths
+                        , resumeBuild
                         , mbOnlyDepsOf
                         , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
@@ -79,7 +80,7 @@ main = do
                   in Just $ mapMaybePlanUnits wantUnit plan
 
         buildPlan verbosity workDir pathsForPrep pathsForBuild
-          buildStrategy mbOnlyDepsOfUnits userUnitArgs plan
+          buildStrategy resumeBuild mbOnlyDepsOfUnits userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using
 --

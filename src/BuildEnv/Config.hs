@@ -185,9 +185,10 @@ data instance BuildPaths Raw
       -- ^ Raw output build @prefix@ (might be relative).
     }
 data instance BuildPaths ForPrep
-  = NoBuildPathsForPrep
-    -- ^ Placeholder to ensure that no build paths are used
-    -- during the build preparation stage.
+  = BuildPathsForPrep
+    { compilerForPrep :: !Compiler
+      -- ^ Which @ghc@ and @ghc-pkg@ to use
+    }
 data instance BuildPaths ForBuild
   = BuildPaths
     { compiler   :: !Compiler
@@ -257,7 +258,7 @@ canonicalizePaths compiler buildStrat
                            , buildPaths =
                              BuildPaths { compiler, destDir, prefix, installDir } }
       return $
-        ( Paths { fetchDir, buildPaths = NoBuildPathsForPrep }, forBuild )
+        ( Paths { fetchDir, buildPaths = BuildPathsForPrep { compilerForPrep = compiler } }, forBuild )
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence
