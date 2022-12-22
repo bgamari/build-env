@@ -302,7 +302,11 @@ cabalVerbosity (Verbosity 2) = "-v1"
 cabalVerbosity (Verbosity 3) = "-v2"
 cabalVerbosity (Verbosity _) = "-v3"
 ghcVerbosity    = cabalVerbosity
-ghcPkgVerbosity = cabalVerbosity
+ghcPkgVerbosity v@(Verbosity i)
+  | i >= 3
+  = "-v2"
+  | otherwise
+  = cabalVerbosity v
 setupVerbosity  = cabalVerbosity
 
 --------------------------------------------------------------------------------
