@@ -43,6 +43,8 @@ import qualified Data.Text as Text
 import BuildEnv.CabalPlan
 import BuildEnv.Config
 import BuildEnv.Options
+import BuildEnv.Utils
+  ( splitOn )
 
 --------------------------------------------------------------------------------
 
@@ -242,15 +244,6 @@ allowNewer =
       | otherwise
       = Nothing
 
--- | Utility list 'splitOn' function.
-splitOn :: Char -> String -> [String]
-splitOn c = go
-  where
-    go "" = []
-    go s
-      | (a,as) <- break (== c) s
-      = a : go (drop 1 as)
-
 -- | Parse a collection of seed dependencies, either from a seed file
 -- or from explicit command-line arguments.
 dependencies :: ModeDescription -> Parser ( PackageData UnitSpecs )
@@ -369,6 +362,7 @@ build = do
   getBuildStrat      <- optStrategy
   mbBuildPaths       <- optMbBuildPaths
   userUnitArgs       <- optUnitArgs
+  resumeBuild        <- optResumeBuild
   mbOnlyDepsOf       <- optOnlyDepsOf
 
   pure $
@@ -387,6 +381,7 @@ build = do
                   , buildStrategy
                   , buildRawPaths
                   , userUnitArgs
+                  , resumeBuild
                   , mbOnlyDepsOf }
 
   where
@@ -492,6 +487,12 @@ build = do
                    <> help "Pass argument to 'ghc-pkg register'"
                    <> metavar "ARG" )
       pure $ const args
+
+    optResumeBuild :: Parser Bool
+    optResumeBuild =
+      switch
+        (  long "resume"
+        <> help "Resume a partially-completed build" )
 
     optOnlyDepsOf :: Parser ( Maybe ( Set PkgName ) )
     optOnlyDepsOf = do

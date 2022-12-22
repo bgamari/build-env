@@ -24,6 +24,9 @@ module BuildEnv.Utils
     , AbstractSem(..)
     , newAbstractSem, noSem, abstractQSem
 
+      -- * Other utilities
+    , splitOn
+
     ) where
 
 -- base
@@ -180,6 +183,15 @@ withTempDir del name k =
     Don'tDeleteTempDirs
       -> do root <- getCanonicalTemporaryDirectory
             createTempDirectory root name >>= k
+
+-- | Utility list 'splitOn' function.
+splitOn :: Char -> String -> [String]
+splitOn c = go
+  where
+    go "" = []
+    go s
+      | (a,as) <- break (== c) s
+      = a : go (drop 1 as)
 
 --------------------------------------------------------------------------------
 -- Semaphores.
