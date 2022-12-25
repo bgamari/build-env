@@ -102,13 +102,15 @@ data Plan
     { planJSONPath :: FilePath }
   deriving stock Show
 
--- | Whether to fetch the sources or to use prefetched sources.
-data Fetch
-  -- | Fetch the sources.
+-- | At which point to start/continue a build.
+data BuildStart
+  -- | Fetch sources and start a new build.
   = Fetch NewOrExisting
-  -- | The sources have already been fetched.
+  -- | Start a new build from prefetched sources.
   | Prefetched
-  deriving stock ( Show, Eq )
+  -- | Resume a previous build.
+  | Resume
+  deriving stock ( Show, Eq, Ord )
 
 -- | Whether to create a new directory or use an existing directory.
 data NewOrExisting
@@ -116,7 +118,7 @@ data NewOrExisting
   = New
   -- | Update an existing directory.
   | Existing
-  deriving stock ( Show, Eq )
+  deriving stock ( Show, Eq, Ord )
 
 -- | Information needed to perform a build.
 data Build
@@ -126,9 +128,8 @@ data Build
       --
       --  - fetched sources directory,
       --  - build output directory structure
-    , buildFetch      :: Fetch
-      -- ^ How to obtain the fetched sources,
-      -- including the build plan.
+    , buildStart      :: BuildStart
+      -- ^ At which stage should the build start?
     , buildBuildPlan  :: Plan
       -- ^ The build plan to follow.
     , buildStrategy   :: BuildStrategy
@@ -136,8 +137,6 @@ data Build
     , mbOnlyDepsOf    :: Maybe ( Set PkgName )
       -- ^ @Just pkgs@ <=> only build @pkgs@ (and their dependencies).
       --   @Nothing@ <=> build all units in the build plan.
-    , resumeBuild     :: Bool
-      -- ^ Whether to resume a previous build, or start from scratch again.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
       -- ^ Extra per-unit arguments.
     }

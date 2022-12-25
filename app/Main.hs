@@ -56,17 +56,17 @@ main = do
         fetchDir <- canonicalizePath rawFetchDir
         doFetch verbosity cabal fetchDir True newOrUpd plan
       BuildMode ( Build { buildBuildPlan
-                        , buildFetch, buildStrategy
+                        , buildStart
+                        , buildStrategy
                         , buildRawPaths = rawPaths
-                        , resumeBuild
                         , mbOnlyDepsOf
                         , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
         ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
           <- canonicalizePaths compiler buildStrategy rawPaths
-        case buildFetch of
-          Prefetched     -> return ()
+        case buildStart of
           Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
+          _              -> return ()
         let mbOnlyDepsOfUnits :: Maybe [UnitId]
             mbOnlyDepsOfUnits =
               case mbOnlyDepsOf of
@@ -79,6 +79,7 @@ main = do
                         return puId
                   in Just $ mapMaybePlanUnits wantUnit plan
 
+        let resumeBuild = case buildStart of { Resume -> True; _ -> False }
         buildPlan verbosity workDir pathsForPrep pathsForBuild
           buildStrategy resumeBuild mbOnlyDepsOfUnits userUnitArgs plan
 
