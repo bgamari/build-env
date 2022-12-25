@@ -1,15 +1,19 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Module      :  BuildEnv.Utils
 -- Description :  Utilities for @build-env@
 --
--- Utilities for spawning of processes in particular environments.
+-- Various utilities:
 --
--- See 'callProcessInIO'.
+--  - Spawning of processes in particular environments; see 'callProcessInIO'.
+--  - Semaphores.
+--  - Asynchronous computations; see 'waitAll'.
+--
 module BuildEnv.Utils
     ( -- * Call a process in a given environment
       ProgPath(..), CallProcess(..), callProcessInIO
@@ -21,11 +25,18 @@ module BuildEnv.Utils
     , AbstractSem(..)
     , newAbstractSem, noSem, abstractQSem
 
+      -- * Async utilities
+    , waitAll
+
     ) where
 
 -- base
 import Control.Concurrent.QSem
   ( QSem, newQSem, signalQSem, waitQSem )
+import Control.Exception
+  ( SomeException, bracket_, throw )
+import Data.Foldable
+  ( for_ )
 import Data.List
   ( intercalate )
 import Data.IORef
@@ -37,11 +48,18 @@ import System.Exit
 import GHC.Stack
   ( HasCallStack )
 
+-- async
+import Control.Concurrent.Async
+  ( Async, cancel, waitCatchSTM )
+
 -- containers
 import Data.Map.Strict
   ( Map )
 import qualified Data.Map.Strict as Map
   ( alter, fromList, toList )
+import Data.Set
+  ( Set )
+import qualified Data.Set as Set
 
 -- directory
 import System.Directory
@@ -53,6 +71,10 @@ import System.FilePath
 
 -- process
 import qualified System.Process as Proc
+
+-- stm
+import Control.Monad.STM
+  ( STM, atomically, orElse, retry )
 
 -- temporary
 import System.IO.Temp
@@ -195,12 +217,52 @@ newAbstractSem whatSem =
 -- | Abstract acquire/release mechanism controlled by the given 'QSem'.
 abstractQSem :: QSem -> AbstractSem
 abstractQSem sem =
-  AbstractSem \ mr -> do
-    waitQSem sem
-    r <- mr
-    signalQSem sem
-    return r
+  AbstractSem $ bracket_ (waitQSem sem) (signalQSem sem)
 
 -- | No acquire/release mechanism required.
 noSem :: AbstractSem
 noSem = AbstractSem { withAbstractSem = id }
+
+--------------------------------------------------------------------------------
+-- 'async'
+
+-- | Wait on a collection of asychronous computations, throwing
+-- an exception on the first failure.
+waitAll :: Set ( Async a ) -> IO ()
+waitAll asyncs
+  | null asyncs
+  = return ()
+  | otherwise
+  = do ( t, mbErr ) <- waitAnyCatch asyncs
+       case mbErr of
+         Left err -> do
+           for_ asyncs cancel
+           throw err
+         Right _ ->
+           waitAll $ Set.delete t asyncs
+
+-- | Like 'Control.Concurrent.Async.waitAnyCatch' from the @async@ package,
+-- but for an arbitrary 'Foldable'.
+--
+-- Wait for any of the supplied asynchronous operations to complete.
+-- The value returned is a pair of the 'Async' that completed, and the
+-- result that would be returned by 'wait' on that 'Async'.
+--
+-- If multiple 'Async's complete or have completed, then the value
+-- returned corresponds to the first completed 'Async' in the list.
+waitAnyCatch :: Foldable t
+             => t ( Async a ) -> IO ( Async a, Either SomeException a )
+waitAnyCatch = atomically . waitAnyCatchSTM
+
+-- | Like 'Control.Concurrent.Async.waitAnyCatchSTM' from the 'async' package,
+-- but for an arbitrary 'Foldable'.
+--
+-- A version of 'waitAnyCatch' that can be used inside an 'STM' transaction.
+waitAnyCatchSTM :: Foldable t
+                => t ( Async a ) -> STM ( Async a, Either SomeException a )
+waitAnyCatchSTM asyncs =
+    foldr go retry asyncs
+  where
+    go :: Async a -> STM (Async a, Either SomeException a)
+                  -> STM (Async a, Either SomeException a)
+    go a mb = ( (a,) <$> waitCatchSTM a ) `orElse` mb

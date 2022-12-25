@@ -110,6 +110,7 @@ import BuildEnv.Script
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
   , AbstractSem(..), noSem, newAbstractSem
+  , waitAll
   )
 
 --------------------------------------------------------------------------------
@@ -492,7 +493,14 @@ buildPlan verbosity workDir
               -- ... and building the units.
               finalUnitAsyncs <- for unitMap (async . doUnitAsync)
               return (finalPkgAsyncs, finalUnitAsyncs)
-            mapM_ wait unitAsyncs
+
+            -- NB: we use waitAll rather than @mapM_ wait@, as we
+            -- want exceptions to be thrown as eagerly as possible.
+            --
+            -- This avoids having to wait until near the end of a build
+            -- to find errors.
+            waitAll $ Set.fromList $ Map.elems unitAsyncs
+
             executeBuildScript unitsBuiltCounter finish
 
           TopoSort -> do
