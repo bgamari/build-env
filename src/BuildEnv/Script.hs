@@ -260,7 +260,8 @@ executeBuildStep mbCounter = \case
           [ ""
           , " " <> replicate n '#'
           , " " <> txt
-          , " " <> replicate n '#' ]
+          , " " <> replicate n '#'
+          , "" ]
 
 ----------------
 -- Shell script
