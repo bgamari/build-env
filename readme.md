@@ -85,7 +85,7 @@ when running the `Setup` script:
 
   - `with-compiler`, `prefix` and `destdir` options supplied by the user,
   - the default `datadir` option,
-  - `cid`, `datasubdir` and `builddir` options supplied by `build-env`,
+  - `cid`, `datasubdir`, `bindir` and `builddir` options supplied by `build-env`,
   - package flags and `dependency` arguments, obtained from the build plan,
   - `<pkg>_datadir` environment variables supplied by `build-env`.
 
