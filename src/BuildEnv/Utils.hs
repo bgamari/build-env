@@ -1,15 +1,18 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
 -- Module      :  BuildEnv.Utils
 -- Description :  Utilities for @build-env@
 --
--- Utilities for spawning of processes in particular environments.
+-- Various utilities:
 --
--- See 'callProcessInIO'.
+--  - Spawning of processes in particular environments; see 'callProcessInIO'.
+--  - Semaphores.
+--
 module BuildEnv.Utils
     ( -- * Call a process in a given environment
       ProgPath(..), CallProcess(..), callProcessInIO
@@ -26,6 +29,8 @@ module BuildEnv.Utils
 -- base
 import Control.Concurrent.QSem
   ( QSem, newQSem, signalQSem, waitQSem )
+import Control.Exception
+  ( bracket_ )
 import Data.List
   ( intercalate )
 import Data.IORef
@@ -195,11 +200,7 @@ newAbstractSem whatSem =
 -- | Abstract acquire/release mechanism controlled by the given 'QSem'.
 abstractQSem :: QSem -> AbstractSem
 abstractQSem sem =
-  AbstractSem \ mr -> do
-    waitQSem sem
-    r <- mr
-    signalQSem sem
-    return r
+  AbstractSem $ bracket_ (waitQSem sem) (signalQSem sem)
 
 -- | No acquire/release mechanism required.
 noSem :: AbstractSem
