@@ -277,7 +277,7 @@ buildUnit verbosity
            , prog         = setupExe
            , args         = [ "build"
                             , "--builddir=" ++ buildDir
-                            , setupVerbosity verbosity]
+                            , setupVerbosity verbosity ]
            , extraPATH    = binDirs
            , extraEnvVars = depDataDirs
            , sem          = noSem
