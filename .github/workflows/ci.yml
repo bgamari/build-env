@@ -31,6 +31,17 @@ jobs:
     - name: "Build executable"
       run: cabal build exe:build-env
 
+    - name: "Build 'c2hs' executable (command line), and restart a build"
+      working-directory: ./tests/ExeDeps
+      run: |
+        cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2 --output-plan c2hs-plan.json
+        rm -rf install/alex*
+        rm -rf install/c2hs*
+        ghc-pkg unregister dlist --package-db sources/package.conf
+        ghc-pkg unregister dlist --package-db install/package.conf
+        cabal run exe:build-env -- build --plan c2hs-plan.json -f sources -o install -v2 --prefetched --resume
+        ghc-pkg --package-db=install/package.conf field dlist id
+
     - name: "Refine a build"
       working-directory: ./tests/Refine
       run: |
@@ -49,7 +60,7 @@ jobs:
       run: |
         mkdir -p localpkgs
         ( cd localpkgs ; cabal get distributive-0.6.2.1 )
-        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources --script build_free.sh --variables -v2
+        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources -o install --script build_free.sh --variables -v2
         mkdir -p build
         cp build_free.sh build/build_free.sh
         cp -a sources   build/srcs
@@ -77,11 +88,6 @@ jobs:
       run: |
         cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -j8 -v2
         ghc-pkg --package-db=install/package.conf field lens id
-
-    - name: "Build 'c2hs' executable (command line)"
-      working-directory: ./tests/ExeDeps
-      run: |
-        cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2
 
     - name: "Generate a build script for 'attoparsec' and run it"
       working-directory: ./tests/Script
