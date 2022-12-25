@@ -38,13 +38,13 @@ import Control.Monad
 import Control.Monad.Fix
   ( MonadFix(mfix) )
 import Data.Char
-  ( isAlphaNum, isSpace )
+  ( isSpace )
 import Data.Foldable
   ( for_, toList )
 import Data.IORef
   ( newIORef )
 import Data.Maybe
-  ( mapMaybe, maybeToList, isNothing )
+  ( catMaybes, mapMaybe, maybeToList, isNothing )
 import Data.String
   ( IsString )
 import Data.Traversable
@@ -76,8 +76,8 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( createDirectoryIfMissing
-  , doesDirectoryExist, removeDirectoryRecursive
+  ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
+  , exeExtension, listDirectory, removeDirectoryRecursive
   )
 
 -- filepath
@@ -115,7 +115,6 @@ import BuildEnv.Script
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
   , AbstractSem(..), noSem, newAbstractSem
-  , splitOn
   )
 
 --------------------------------------------------------------------------------
@@ -370,7 +369,7 @@ buildPlan :: Verbosity
              -- ^ Build plan to execute.
           -> IO ()
 buildPlan verbosity workDir
-          pathsForPrep
+          pathsForPrep@( Paths { buildPaths = buildPathsForPrep })
           pathsForBuild
           buildStrat
           resumeBuild
@@ -412,8 +411,8 @@ buildPlan verbosity workDir
 
     mbAlreadyBuilt <-
       if resumeBuild
-      then let prepComp = compilerForPrep $ buildPaths pathsForPrep
-           in Just <$> getInstalledUnits verbosity prepComp pkgDbDirsForPrep
+      then let prepComp = compilerForPrep buildPathsForPrep
+           in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirsForPrep fullDepMap
       else return Nothing
 
     let -- Units to build, in dependency order.
@@ -651,13 +650,25 @@ tagUnits = go Map.empty
       , ( mbUnit, newPkgs ) <- Map.insertLookupWithKey (\_ a _ -> a) (nm,ver) puId seenPkgs
       = (cu, mbUnit) : go newPkgs cus
 
--- | Compute the set of @UnitId@s that already appear in the temporary
--- package database, to avoid unnecessarily recompiling them.
+-- | Compute the set of @UnitId@s that have already been installed, to avoid
+-- unnecessarily recompiling them.
 --
--- TODO: this does not account for executables; these will be rebuilt
--- no matter what.
-getInstalledUnits :: Verbosity -> Compiler -> PkgDbDirs ForPrep -> IO ( Set UnitId )
-getInstalledUnits verbosity ( Compiler { ghcPkgPath } ) ( PkgDbDirsForPrep { tempPkgDbDir } ) = do
+-- This set of already-installed units is computed by querying the following:
+--
+--  - Library: is it already registered in the package database?
+--  - Executable: is there an executable of the correct name in the binary
+--    directory associated with the unit?
+getInstalledUnits :: Verbosity
+                  -> Compiler
+                  -> BuildPaths ForPrep
+                  -> PkgDbDirs ForPrep
+                  -> Map UnitId PlanUnit
+                  -> IO ( Set UnitId )
+getInstalledUnits verbosity
+                  ( Compiler { ghcPkgPath } )
+                  ( BuildPathsForPrep { installDir } )
+                  ( PkgDbDirsForPrep { tempPkgDbDir } )
+                  plan = do
   pkgVerUnitIds <-
     words <$>
     Process.readProcess ( ghcPkgPath )
@@ -667,14 +678,44 @@ getInstalledUnits verbosity ( Compiler { ghcPkgPath } ) ( PkgDbDirsForPrep { tem
       , "--package-db", tempPkgDbDir ]
         -- TODO: allow user package databases too?
       ""
-  return $ Set.fromList $ map parseUnitId pkgVerUnitIds
+  let installedLibs = map ( UnitId . Text.pack ) pkgVerUnitIds
+  verboseMsg verbosity $
+    "Preinstalled libraries:\n" <> Text.unlines ( map mkLine installedLibs )
+
+  binDirContents <- listDirectory binsDir
+  installedBins  <- catMaybes <$> mapM binDirMaybe binDirContents
+  verboseMsg verbosity $
+    "Preinstalled executables:\n" <> Text.unlines ( map mkLine installedBins )
+
+  return $ Set.fromList installedLibs <> Set.fromList installedBins
   where
-    parseUnitId :: String -> UnitId
-    parseUnitId pkgVerUnitId =
-      case splitOn '-' pkgVerUnitId of
-        [_,_,unitId]
-          | all isAlphaNum unitId
-          -> UnitId $ Text.pack unitId
-        _ -> error . unlines $
-               [ "Could not parse installed units from " <> tempPkgDbDir
-               , "Unexpected unit " <> pkgVerUnitId ]
+
+    mkLine :: UnitId -> Text
+    mkLine ( UnitId uid ) = "  - " <> uid
+
+    binsDir :: FilePath
+    binsDir = installDir </> "bin"
+    binDirMaybe :: FilePath -> IO (Maybe UnitId)
+    binDirMaybe binDir = do
+      isDir <- doesDirectoryExist ( binsDir </> binDir )
+      if not isDir
+      then return Nothing
+      else
+        case plan Map.!? ( UnitId $ Text.pack binDir ) of
+          -- Is this directory name the 'UnitId' of an executable
+          -- in the build plan?
+          Just ( PU_Configured cu )
+            | ConfiguredUnit
+              { puId
+              , puComponentName =
+                  ComponentName
+                    { componentName = comp
+                    , componentType = Exe }
+              } <- cu
+            -> do -- If so, does it contain the executable we expect?
+                  let exePath = binsDir </> binDir </> Text.unpack comp <.> exeExtension
+                  exeExists <- doesFileExist exePath
+                  if exeExists
+                  then return $ Just puId
+                  else return Nothing
+          _ -> return Nothing

@@ -126,9 +126,6 @@ data Build
       --
       --  - fetched sources directory,
       --  - build output directory structure
-      --
-      -- NB: the build directories are ignored if we are ouputting
-      -- a shell script containing variables.
     , buildFetch      :: Fetch
       -- ^ How to obtain the fetched sources,
       -- including the build plan.
