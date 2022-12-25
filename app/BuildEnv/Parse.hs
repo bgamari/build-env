@@ -342,20 +342,18 @@ build :: Parser Build
 build = do
 
   buildBuildPlan     <- plan Building
-  buildFetch         <- optFetch
+  buildStart         <- optStart
   buildStrategy      <- optStrategy
   buildRawPaths      <- optRawPaths
   userUnitArgs       <- optUnitArgs
-  resumeBuild        <- optResumeBuild
   mbOnlyDepsOf       <- optOnlyDepsOf
 
   pure $
-    Build { buildFetch
+    Build { buildStart
           , buildBuildPlan
           , buildStrategy
           , buildRawPaths
           , userUnitArgs
-          , resumeBuild
           , mbOnlyDepsOf }
 
   where
@@ -390,15 +388,21 @@ build = do
         <> help "Output a shell script containing build steps"
         <> metavar "OUTFILE" )
 
-    optFetch :: Parser Fetch
-    optFetch =
-      prefetched <|> ( Fetch <$> newOrExisting )
+    optStart :: Parser BuildStart
+    optStart =
+      resume <|> prefetched <|> ( Fetch <$> newOrExisting )
 
-    prefetched :: Parser Fetch
+    resume :: Parser BuildStart
+    resume =
+      flag' Resume
+        (  long "resume"
+        <> help "Resume a partially-completed build" )
+
+    prefetched :: Parser BuildStart
     prefetched =
       flag' Prefetched
         (  long "prefetched"
-        <> help "Use prefetched sources instead of fetching from Hackage" )
+        <> help "Start the build from the prefetched sources" )
 
     optRawPaths :: Parser (Paths Raw)
     optRawPaths = do
@@ -460,12 +464,6 @@ build = do
                    <> help "Pass argument to 'ghc-pkg register'"
                    <> metavar "ARG" )
       pure $ const args
-
-    optResumeBuild :: Parser Bool
-    optResumeBuild =
-      switch
-        (  long "resume"
-        <> help "Resume a partially-completed build" )
 
     optOnlyDepsOf :: Parser ( Maybe ( Set PkgName ) )
     optOnlyDepsOf = do

@@ -39,7 +39,7 @@ jobs:
         rm -rf install/c2hs*
         ghc-pkg unregister dlist --package-db sources/package.conf
         ghc-pkg unregister dlist --package-db install/package.conf
-        cabal run exe:build-env -- build --plan c2hs-plan.json -f sources -o install -v2 --prefetched --resume
+        cabal run exe:build-env -- build --plan c2hs-plan.json -f sources -o install -v2 --resume
         ghc-pkg --package-db=install/package.conf field dlist id
 
     - name: "Refine a build"
