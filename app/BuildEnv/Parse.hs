@@ -11,8 +11,6 @@
 module BuildEnv.Parse ( options, runOptionsParser ) where
 
 -- base
-import Data.Bifunctor
-  ( first )
 import Data.Char
   ( isSpace )
 import Data.Bool
@@ -30,8 +28,6 @@ import qualified Data.Set as Set
 
 -- optparse-applicative
 import Options.Applicative
-import Options.Applicative.Types
-  ( Context(..) )
 
 -- text
 import Data.Text
@@ -52,12 +48,7 @@ import BuildEnv.Utils
 runOptionsParser :: FilePath -> IO Opts
 runOptionsParser currWorkDir = do
   args <- getArgs
-  res <- handleParseResult $ execParserPure pPrefs pInfo args
-  case res of
-    Left  (err, ctxts)
-      -> handleParseResult (Failure $ parserFailure pPrefs pInfo err ctxts)
-    Right opts
-      -> return opts
+  handleParseResult $ execParserPure pPrefs pInfo args
   where
     pInfo =
       info ( helper <*> options currWorkDir )
@@ -71,17 +62,15 @@ runOptionsParser currWorkDir = do
               , columns 90 ]
 
 -- | The command-line options parser for the 'build-env' executable.
-options :: FilePath -> Parser (Either (ParseError, [Context]) Opts)
+options :: FilePath -> Parser Opts
 options currWorkDir = do
-  mbMode    <- optMode
+  mode      <- optMode
   compiler  <- optCompiler
   cabal     <- optCabal
   workDir   <- optChangeWorkingDirectory currWorkDir
   verbosity <- optVerbosity
   delTemp   <- optTempDirPermanence
-  pure $ case mbMode of
-    Right mode -> Right $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
-    Left  err  -> Left err
+  pure $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
@@ -143,17 +132,17 @@ optTempDirPermanence =
              <> help "Preserve temporary build directories (useful for debugging)" )
 
 -- | Parse the mode in which to run the application: plan, fetch, build.
-optMode :: Parser (Either (ParseError, [Context]) Mode)
+optMode :: Parser Mode
 optMode =
   hsubparser . mconcat $
     [ command "plan"  $
-        info ( fmap Right . PlanMode  <$> planInputs Planning <*> optOutput )
+        info ( PlanMode  <$> planInputs Planning <*> optOutput )
         ( fullDesc <> planInfo )
     , command "fetch" $
-        info ( fmap Right . FetchMode <$> fetchDescription <*> newOrExisting )
+        info ( FetchMode <$> fetchDescription <*> newOrExisting )
         ( fullDesc <> fetchInfo )
     , command "build" $
-        info ( fmap BuildMode . giveBuildContext <$> build )
+        info ( BuildMode <$> build )
         ( fullDesc <> buildInfo )
     ]
   where
@@ -168,10 +157,6 @@ optMode =
     planInfo  = progDesc "Compute a build plan from a collection of seeds"
     fetchInfo = progDesc "Fetch package sources"
     buildInfo = progDesc "Build and register packages"
-
-    giveBuildContext :: Either ParseError Build -> Either (ParseError, [Context]) Build
-    giveBuildContext =
-       first ( , [ Context "build" $ info build ( briefDesc <> buildInfo ) ] )
 
 -- | Description of which mode we are in.
 --
@@ -353,54 +338,33 @@ newOrExisting =
              <> help "Update existing fetched sources directory" )
 
 -- | Parse the options for the @build@ command.
-build :: Parser (Either ParseError Build)
+build :: Parser Build
 build = do
 
   buildBuildPlan     <- plan Building
-  fetchDir           <- optFetchDir Building
   buildFetch         <- optFetch
-  getBuildStrat      <- optStrategy
-  mbBuildPaths       <- optMbBuildPaths
+  buildStrategy      <- optStrategy
+  buildRawPaths      <- optRawPaths
   userUnitArgs       <- optUnitArgs
   resumeBuild        <- optResumeBuild
   mbOnlyDepsOf       <- optOnlyDepsOf
 
   pure $
-    let !(~buildPaths, mbBuildStrategy) =
-          case mbBuildPaths of
-            Nothing -> ( error "No build paths when using --variables."
-                       , getBuildStrat True )
-            Just paths -> ( paths, getBuildStrat False )
-        buildRawPaths = Paths { fetchDir, buildPaths }
-    in case mbBuildStrategy of
-        Left err -> Left err
-        Right buildStrategy ->
-          Right $
-            Build { buildFetch
-                  , buildBuildPlan
-                  , buildStrategy
-                  , buildRawPaths
-                  , userUnitArgs
-                  , resumeBuild
-                  , mbOnlyDepsOf }
+    Build { buildFetch
+          , buildBuildPlan
+          , buildStrategy
+          , buildRawPaths
+          , userUnitArgs
+          , resumeBuild
+          , mbOnlyDepsOf }
 
   where
 
-    optStrategy :: Parser (Bool -> Either ParseError BuildStrategy)
-    optStrategy = fmap (Right .) optScript <|> ( errOnTrue . Execute <$> optRunStrat )
-
-    errOnTrue :: a -> Bool -> Either ParseError a
-    errOnTrue _ True  = Left $ ErrorMsg "Cannot pass --variables unless also passing --script"
-    errOnTrue a False = Right a
+    optStrategy :: Parser BuildStrategy
+    optStrategy = optScript <|> ( Execute <$> optRunStrat )
 
     optRunStrat :: Parser RunStrategy
     optRunStrat = ( Async <$> asyncSem ) <|> pure TopoSort
-
-    optMbBuildPaths :: Parser ( Maybe ( BuildPaths Raw ) )
-    optMbBuildPaths = fmap Just optRawPaths
-      <|> flag' Nothing
-            (  long "variables"
-            <> help "Use variables in the shell script output ($PREFIX etc)" )
 
     asyncSem :: Parser AsyncSem
     asyncSem =
@@ -410,11 +374,14 @@ build = do
         <> help "Use asynchronous package building"
         <> metavar "N" )
 
-    optScript :: Parser (Bool -> BuildStrategy)
+    optScript :: Parser BuildStrategy
     optScript = do
       scriptPath <- optScriptPath
-      pure
-        \ useVariables -> Script { scriptPath, useVariables }
+      useVariables <-
+        switch
+          (  long "variables"
+          <> help "Use variables in the shell script output ($PREFIX etc)" )
+      pure $ Script { scriptPath, useVariables }
 
     optScriptPath :: Parser FilePath
     optScriptPath =
@@ -433,8 +400,14 @@ build = do
         (  long "prefetched"
         <> help "Use prefetched sources instead of fetching from Hackage" )
 
-    optRawPaths :: Parser (BuildPaths Raw)
+    optRawPaths :: Parser (Paths Raw)
     optRawPaths = do
+      fetchDir   <- optFetchDir Building
+      buildPaths <- optBuildPaths
+      return $ Paths { fetchDir, buildPaths }
+
+    optBuildPaths :: Parser (BuildPaths Raw)
+    optBuildPaths = do
       rawPrefix <-
         option str (  short 'o'
                    <> long "prefix"

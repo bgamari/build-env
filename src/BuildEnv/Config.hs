@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TypeFamilies #-}
@@ -187,7 +188,9 @@ data instance BuildPaths Raw
 data instance BuildPaths ForPrep
   = BuildPathsForPrep
     { compilerForPrep :: !Compiler
-      -- ^ Which @ghc@ and @ghc-pkg@ to use
+      -- ^ Which @ghc@ and @ghc-pkg@ to use.
+    , installDir      :: !FilePath
+      -- ^ Output installation directory @destdir/prefix@ (absolute).
     }
 data instance BuildPaths ForBuild
   = BuildPaths
@@ -223,42 +226,40 @@ canonicalizePaths :: Compiler
 canonicalizePaths compiler buildStrat
   ( Paths
     { fetchDir   = fetchDir0
-    , buildPaths = rawBuildPaths } )
+    , buildPaths = RawBuildPaths { rawPrefix, rawDestDir } } )
   = do
-      fetchDir <- canonicalizePath fetchDir0
-      forBuild <-
-        case buildStrat of
-          Script { useVariables }
-            | useVariables
-            -> return $
-                Paths { fetchDir   = "${SOURCES}"
-                      , buildPaths =
-                        BuildPaths
-                          { prefix     = "${PREFIX}"
-                          , destDir    = "${DESTDIR}"
-                          , installDir = "${DESTDIR}" </> "${PREFIX}"
-                          , compiler =
-                            Compiler { ghcPath = "${GHC}"
-                                     , ghcPkgPath = "${GHCPKG}" } } }
-          _don'tUseVars
-            | RawBuildPaths { rawPrefix, rawDestDir } <- rawBuildPaths
-            -- If we use variables, 'rawBuildPaths' might be undefined,
-            -- so only force it after checking whether we are using variables.
-            -> do
-            prefix     <- canonicalizePath rawPrefix
-            destDir    <- canonicalizePath rawDestDir
-            installDir <- canonicalizePath ( rawDestDir </> dropDrive prefix )
-              -- We must use dropDrive here. Quoting from the documentation of (</>):
-              --
-              --   If the second path starts with a path separator or a drive letter,
-              --   then (</>) returns the second path.
-              --
-              -- We don't want that, as we *do* want to concatenate both paths.
-            return $ Paths { fetchDir
-                           , buildPaths =
-                             BuildPaths { compiler, destDir, prefix, installDir } }
+      fetchDir   <- canonicalizePath fetchDir0
+      prefix     <- canonicalizePath rawPrefix
+      destDir    <- canonicalizePath rawDestDir
+      installDir <- canonicalizePath ( rawDestDir </> dropDrive prefix )
+        -- We must use dropDrive here. Quoting from the documentation of (</>):
+        --
+        --   If the second path starts with a path separator or a drive letter,
+        --   then (</>) returns the second path.
+        --
+        -- We don't want that, as we *do* want to concatenate both paths.
+
+      let forBuild = case buildStrat of
+            Script { useVariables }
+              | useVariables
+              -> Paths { fetchDir   = "${SOURCES}"
+                       , buildPaths =
+                         BuildPaths
+                           { prefix     = "${PREFIX}"
+                           , destDir    = "${DESTDIR}"
+                           , installDir = "${DESTDIR}" </> "${PREFIX}"
+                           , compiler =
+                             Compiler { ghcPath = "${GHC}"
+                                      , ghcPkgPath = "${GHCPKG}" } } }
+            _don'tUseVars ->
+              Paths { fetchDir
+                    , buildPaths =
+                      BuildPaths { compiler, destDir, prefix, installDir } }
       return $
-        ( Paths { fetchDir, buildPaths = BuildPathsForPrep { compilerForPrep = compiler } }, forBuild )
+        ( Paths { fetchDir
+                , buildPaths =
+                  BuildPathsForPrep { compilerForPrep = compiler, installDir } }
+        , forBuild )
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence
