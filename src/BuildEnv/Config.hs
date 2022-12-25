@@ -274,8 +274,16 @@ data TempDirPermanence
 --
 -- The default verbosity level is 'Normal' (1).
 newtype Verbosity = Verbosity Int
-  deriving newtype (Eq, Ord)
+  deriving newtype (Eq, Ord, Num)
   deriving stock   Show
+
+-- | Get the flag corresponding to a verbosity, e.g. @-v2@.
+verbosityFlag :: Verbosity -> String
+verbosityFlag ( Verbosity i )
+  | i <= 0
+  = "-v0"
+  | otherwise
+  = "-v" <> show i
 
 pattern Quiet, Normal, Verbose, Debug :: Verbosity
 pattern Quiet   = Verbosity 0
@@ -297,19 +305,17 @@ putMsg msg = do
 
 ghcVerbosity, ghcPkgVerbosity, cabalVerbosity, setupVerbosity
   :: Verbosity -> String
-cabalVerbosity (Verbosity i)
-  | i <= 1
-  = "-v0"
-cabalVerbosity (Verbosity 2) = "-v1"
-cabalVerbosity (Verbosity 3) = "-v2"
-cabalVerbosity (Verbosity _) = "-v3"
-ghcVerbosity    = cabalVerbosity
-ghcPkgVerbosity v@(Verbosity i)
-  | i >= 3
-  = "-v2"
-  | otherwise
-  = cabalVerbosity v
-setupVerbosity  = cabalVerbosity
+ghcVerbosity    = verbosityFlag . min maxGhcVerbosity    . subtract 1
+ghcPkgVerbosity = verbosityFlag . min maxGhcPkgVerbosity . subtract 1
+cabalVerbosity  = verbosityFlag . min maxCabalVerbosity  . subtract 1
+setupVerbosity  = verbosityFlag . min maxSetupVerbosity  . subtract 1
+
+maxGhcVerbosity, maxGhcPkgVerbosity, maxCabalVerbosity, maxSetupVerbosity
+  :: Verbosity
+maxGhcVerbosity    = Verbosity 3
+maxGhcPkgVerbosity = Verbosity 2
+maxCabalVerbosity  = Verbosity 3
+maxSetupVerbosity  = maxCabalVerbosity
 
 --------------------------------------------------------------------------------
 -- Reporting progress.
