@@ -232,12 +232,13 @@ buildUnit verbosity
           buildDir = quoteArg scriptCfg -- Quote to escape \ on Windows.
                    $ "temp-build" </> thisUnit'sId
 
-          binsDir = installDir </> "bin"
           -- Set a different binDir for each executable unit,
           -- so that we can know precisely which executables have been built
           -- for the purpose of resumable builds.
           thisUnit'sBinDir = quoteArg scriptCfg
-                           $ binsDir </> thisUnit'sId
+                           $ prefix </> "bin" </> thisUnit'sId
+            -- NB: use prefix not installDir here, otherwise the copy command
+            -- will duplicate destDir.
           thisUnit'sBinDirArg
             | Exe <- cuComponentType unit
             = [ "--bindir=" ++ thisUnit'sBinDir ]
@@ -247,7 +248,7 @@ buildUnit verbosity
           -- Add the output binary directories to PATH, to satisfy executable
           -- dependencies during the build.
           binDirs = [ quoteArg scriptCfg $
-                      binsDir </> Text.unpack ( unUnitId exeUnitId )
+                      installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
                     | exeUnitId <- puExeDepends ]
 
             -- NB: make sure to update the readme after changing
