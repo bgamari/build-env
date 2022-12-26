@@ -36,12 +36,20 @@ import Control.Exception
   ( bracket_ )
 import Data.List
   ( intercalate )
+import Data.Maybe
+  ( fromMaybe )
 import Data.IORef
   ( readIORef )
 import System.Environment
   ( getEnvironment )
 import System.Exit
-  ( ExitCode(..) )
+  ( ExitCode(..), exitWith )
+import System.IO
+  ( IOMode(..), hPutStrLn, withFile )
+import qualified System.IO as System.Handle
+  ( stderr )
+import GHC.IO.Handle
+  ( hDuplicateTo )
 import GHC.Stack
   ( HasCallStack )
 
@@ -53,11 +61,11 @@ import qualified Data.Map.Strict as Map
 
 -- directory
 import System.Directory
-  ( makeAbsolute )
+  ( createDirectoryIfMissing, makeAbsolute )
 
 -- filepath
 import System.FilePath
-  ( (</>) )
+  ( (</>), (<.>), takeDirectory )
 
 -- process
 import qualified System.Process as Proc
@@ -99,6 +107,8 @@ data CallProcess
      -- If it's a relative path, it should be relative to the @cwd@ field.
   , args         :: !Args
      -- ^ Arguments to the program.
+  , logBasePath  :: !( Maybe FilePath )
+     -- ^ Log @stdout@ to @basePath.stdout@ and @stderr@ to @basePath.stderr@.
   , sem          :: !AbstractSem
      -- ^ Lock to take when calling the process
      -- and waiting for it to return, to avoid
@@ -116,7 +126,7 @@ callProcessInIO :: HasCallStack
                     -- to report the progress that has been made so far.
                 -> CallProcess
                 -> IO ()
-callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem } ) = do
+callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBasePath, sem } ) = do
   absProg <-
     case prog of
       AbsPath p -> return p
@@ -130,6 +140,12 @@ callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem }
         --
         -- We always want the program to be interpreted relative to the cwd
         -- argument, so we prepend @cwd@ and then make it absolute.
+  let argsStr
+        | null args = ""
+        | otherwise = " " ++ unwords args
+      command =
+        [ "  > " ++ absProg ++ argsStr
+        , "  CWD = " ++ cwd ]
   env <-
     if null extraPATH && null extraEnvVars
     then return Nothing
@@ -137,29 +153,47 @@ callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, sem }
             let env1 = Map.fromList $ env0 ++ extraEnvVars
                 env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
             return $ Just env2
-  let processArgs =
-        ( Proc.proc absProg args )
-          { Proc.cwd = if cwd == "." then Nothing else Just cwd
-          , Proc.env = env }
-  res <- withAbstractSem sem do
-    (_, _, _, ph) <- Proc.createProcess processArgs
-    Proc.waitForProcess ph
-  case res of
-    ExitSuccess -> return ()
-    ExitFailure i -> do
-      let argsStr
-           | null args = ""
-           | otherwise = " " ++ unwords args
-      progressReport <-
-        case mbCounter of
-          Nothing -> return []
-          Just ( Counter { counterRef, counterMax } ) -> do
-            progress <- readIORef counterRef
-            return $ [ "After " <> show progress <> " of " <> show counterMax ]
-      error . unlines $
-        [ "callProcess failed with non-zero exit code " ++ show i ++ "."
-        , "  > " ++ absProg ++ argsStr
-        , "CWD = " ++ cwd ] ++ progressReport
+  let withHandles :: ( ( Proc.StdStream, Proc.StdStream ) -> IO () ) -> IO ()
+      withHandles action = case logBasePath of
+        Nothing -> action ( Proc.Inherit, Proc.Inherit )
+        Just logPath -> do
+          let stdoutFile = logPath <.> "stdout"
+              stderrFile = logPath <.> "stderr"
+          createDirectoryIfMissing True $ takeDirectory logPath
+          withFile stdoutFile AppendMode \ stdoutFileHandle ->
+            withFile stderrFile AppendMode \ stderrFileHandle -> do
+              hDuplicateTo System.Handle.stderr stderrFileHandle
+                -- Write stderr to the log file and to the terminal.
+              hPutStrLn stdoutFileHandle ( unlines command )
+              action ( Proc.UseHandle stdoutFileHandle, Proc.UseHandle stderrFileHandle )
+  withHandles \ ( stdoutStream, stderrStream ) -> do
+    let processArgs =
+          ( Proc.proc absProg args )
+            { Proc.cwd     = if cwd == "." then Nothing else Just cwd
+            , Proc.env     = env
+            , Proc.std_out = stdoutStream
+            , Proc.std_err = stderrStream }
+    res <- withAbstractSem sem do
+      (_, _, _, ph) <- Proc.createProcess_ "createProcess" processArgs
+        -- Use 'createProcess_' to avoid closing handles prematurely.
+      Proc.waitForProcess ph
+    case res of
+      ExitSuccess -> return ()
+      ExitFailure i -> do
+        progressReport <-
+          case mbCounter of
+            Nothing -> return []
+            Just ( Counter { counterRef, counterMax } ) -> do
+              progress <- readIORef counterRef
+              return $ [ "After " <> show progress <> " of " <> show counterMax ]
+        let msg = [ "callProcess failed with non-zero exit code " ++ show i ++ ". Command:" ]
+                     ++ command ++ progressReport
+        case stderrStream of
+          Proc.UseHandle errHandle ->
+            hPutStrLn errHandle
+              ( unlines $ msg ++ [ "Logs are available at: " <> fromMaybe "" logBasePath <> ".{stdout, stderr}" ] )
+          _ -> putStrLn (unlines msg)
+        exitWith res
 
 -- | Add filepaths to the given key in a key/value environment.
 augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String

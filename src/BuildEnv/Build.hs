@@ -165,6 +165,7 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
          , args         = cabalBuildArgs
          , extraPATH    = []
          , extraEnvVars = []
+         , logBasePath  = Nothing
          , sem          = noSem }
 
     let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
@@ -338,6 +339,7 @@ cabalFetch verbosity cabal root pkgNmVer = do
          , args
          , extraPATH    = []
          , extraEnvVars = []
+         , logBasePath  = Nothing
          , sem          = noSem }
 
 --------------------------------------------------------------------------------
@@ -348,8 +350,9 @@ cabalFetch verbosity cabal root pkgNmVer = do
 -- into a local package database at @<install-dir>/package.conf@.
 buildPlan :: Verbosity
           -> FilePath
-              -- ^ Working directory
-              -- (used only to compute relative paths for local packages).
+              -- ^ Working directory.
+              -- Used to compute relative paths for local packages,
+              -- and to choose a logging directory.
           -> Paths ForPrep
           -> Paths ForBuild
           -> BuildStrategy

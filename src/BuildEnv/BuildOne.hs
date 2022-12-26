@@ -84,14 +84,19 @@ setupPackage :: Verbosity
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
-             paths@( BuildPaths { installDir } )
+             paths@( BuildPaths { installDir, logDir } )
              ( PkgDbDirsForBuild { tempPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
              ( PkgDir { pkgDir = buildPkgDir } )
              plan
-             unit@( ConfiguredUnit { puSetupDepends, puExeDepends } )
+             unit@( ConfiguredUnit { puId, puSetupDepends, puExeDepends } )
 
-  = do -- Find the appropriate Setup.hs file (creating one if necessary)
+  = do let logPath
+             | verbosity <= Quiet
+             = Nothing
+             | otherwise
+             = Just $ logDir </> Text.unpack ( unUnitId puId )
+       -- Find the appropriate Setup.hs file (creating one if necessary)
        setupHs <- findSetupHs prepPkgDir
        return do
          scriptCfg <- askScriptConfig
@@ -122,6 +127,7 @@ setupPackage verbosity
               , args         = setupArgs
               , extraPATH    = binDirs
               , extraEnvVars = setupDepDataDirs
+              , logBasePath  = logPath
               , sem          = noSem
               }
 
@@ -174,7 +180,7 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
-          paths@( BuildPaths { installDir, prefix, destDir } )
+          paths@( BuildPaths { installDir, prefix, destDir, logDir } )
           ( PkgDbDirsForBuild
             { tempPkgDbDir
             , finalPkgDbDir
@@ -186,7 +192,12 @@ buildUnit verbosity
                      , registerArgs  = userGhcPkgArgs } )
           plan unit@( ConfiguredUnit { puId, puDepends, puExeDepends } )
   = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
-        thisUnit'sId = Text.unpack (unUnitId puId)
+        thisUnit'sId = Text.unpack ( unUnitId puId )
+        logPath
+          | verbosity <= Quiet
+          = Nothing
+          | otherwise
+          = Just $ logDir </> thisUnit'sId
         unitPrintableName
           | verbosity >= Verbose
           = pkgNameVer <> ":" <> compName
@@ -266,6 +277,7 @@ buildUnit verbosity
            , args         = "configure" : configureArgs
            , extraPATH    = binDirs
            , extraEnvVars = depDataDirs -- Not sure this is needed for 'Setup configure'.
+           , logBasePath  = logPath
            , sem          = noSem
            }
 
@@ -280,6 +292,7 @@ buildUnit verbosity
                             , setupVerbosity verbosity ]
            , extraPATH    = binDirs
            , extraEnvVars = depDataDirs
+           , logBasePath  = logPath
            , sem          = noSem
            }
 
@@ -296,6 +309,7 @@ buildUnit verbosity
                                 ++ userHaddockArgs
              , extraPATH    = binDirs
              , extraEnvVars = depDataDirs
+             , logBasePath  = logPath
              , sem          = noSem
              }
 
@@ -310,6 +324,7 @@ buildUnit verbosity
                             , "--destdir", quoteArg scriptCfg destDir ]
            , extraPATH    = []
            , extraEnvVars = []
+           , logBasePath  = logPath
            , sem          = noSem
            }
 
@@ -339,6 +354,7 @@ buildUnit verbosity
                                   ] ++ extraSetupArgs
                  , extraPATH    = []
                  , extraEnvVars = []
+                 , logBasePath  = logPath
                  , sem          = noSem
                  }
 
@@ -357,6 +373,7 @@ buildUnit verbosity
                                   ++ extraPkgArgs
                  , extraPATH    = []
                  , extraEnvVars = []
+                 , logBasePath  = logPath
                  , sem          = abstractQSem pkgDbSem
                    -- Take a lock to avoid contention on the package database
                    -- when building units concurrently.
