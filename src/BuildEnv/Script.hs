@@ -315,16 +315,16 @@ stepScript scriptCfg = \case
           n = length $ show tot
           l = 2 * n + 10
           txt = "\\n " <> replicate l '#' <> "\\n "
-                      <> "## %0" <> show n <> "d of " <> show tot <> " ##" <> "\\n "
-                      <> replicate l '#' <> "\\n"
+                       <> "## %0" <> show n <> "d of " <> show tot <> " ##" <> "\\n "
+                       <> replicate l '#' <> "\\n"
 
   CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBasePath } ) ->
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
+    logCommand ++
     [ "( cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
-    ++ logCommand
     ++
     [ "  " <> cmd <> pipeToLogs <> " )"
     , resVar <> "=$?"
@@ -388,7 +388,7 @@ stepScript scriptCfg = \case
             let stdoutFile, stderrFile :: Text
                 stdoutFile = q ( logPath <.> "stdout" )
                 stderrFile = q ( logPath <.> "stderr" )
-            in ( [ "  echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
+            in ( [ "echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
                , " > " <> stdoutFile <> " 2> >( tee -a " <> stderrFile <> " >&2 )"
                   -- Write stdout to the stdout log file.
                   -- Write stderr both to the terminal and to the stderr log file.
@@ -403,7 +403,7 @@ stepScript scriptCfg = \case
             [ "  echo \"After ${buildEnvProgress} of " <> Text.pack (show tot) <> "\"" ]
 
 unquote :: Text -> Text
-unquote = Text.filter (not . (== '\"') )
+unquote = Text.filter ( not . (== '\"') )
 
 ----
 -- Helper to check that environment variables are set as expected.
