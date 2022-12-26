@@ -72,6 +72,12 @@ import qualified Data.Text as Text
 import qualified Data.Text.IO as Text
   ( putStrLn )
 
+-- time
+import Data.Time.Clock
+  ( getCurrentTime )
+import Data.Time.Format
+  ( defaultTimeLocale, formatTime )
+
 --------------------------------------------------------------------------------
 -- Build strategy
 
@@ -202,6 +208,8 @@ data instance BuildPaths ForBuild
       -- ^ Output build @prefix@ (absolute).
     , installDir :: !FilePath
       -- ^ Output installation directory @destdir/prefix@ (absolute).
+    , logDir     :: !FilePath
+      -- ^ Directory in which to put logs.
     }
 
 -- | The appropriate stage at which to use a filepath.
@@ -239,6 +247,14 @@ canonicalizePaths compiler buildStrat
         --
         -- We don't want that, as we *do* want to concatenate both paths.
 
+      logDir <- case buildStrat of
+        Script  {} -> return "${LOGDIR}" -- LOGDIR is defined by the script.
+        Execute {} -> do
+          -- Pick the logging directory based on the current time.
+          time <- getCurrentTime
+          let logDir = "logs" </> formatTime defaultTimeLocale "%0Y-%m-%d_%H-%M-%S" time
+          canonicalizePath logDir
+
       let forBuild = case buildStrat of
             Script { useVariables }
               | useVariables
@@ -248,13 +264,14 @@ canonicalizePaths compiler buildStrat
                            { prefix     = "${PREFIX}"
                            , destDir    = "${DESTDIR}"
                            , installDir = "${DESTDIR}" </> "${PREFIX}"
+                           , logDir
                            , compiler =
-                             Compiler { ghcPath = "${GHC}"
+                             Compiler { ghcPath    = "${GHC}"
                                       , ghcPkgPath = "${GHCPKG}" } } }
             _don'tUseVars ->
               Paths { fetchDir
                     , buildPaths =
-                      BuildPaths { compiler, destDir, prefix, installDir } }
+                      BuildPaths { compiler, destDir, prefix, installDir, logDir } }
       return $
         ( Paths { fetchDir
                 , buildPaths =

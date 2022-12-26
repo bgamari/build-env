@@ -1,4 +1,5 @@
 install/
 sources/
+logs/
 *.json
 *.sh

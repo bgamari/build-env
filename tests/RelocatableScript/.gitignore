@@ -1,4 +1,5 @@
 build/
 sources/
 localpkgs/
+logs/
 *.json

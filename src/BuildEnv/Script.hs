@@ -50,11 +50,17 @@ import Data.Monoid
 import Data.String
   ( IsString(..) )
 import System.IO
-  ( hFlush, stdout )
+  ( hFlush )
+import qualified System.IO as System
+  ( stdout )
 
 -- directory
 import System.Directory
   ( createDirectoryIfMissing )
+
+-- filepath
+import System.FilePath
+  ( (<.>) )
 
 -- text
 import Data.Text
@@ -246,7 +252,7 @@ executeBuildStep :: Maybe Counter
 executeBuildStep mbCounter = \case
   CallProcess cp  -> callProcessInIO mbCounter cp
   CreateDir   dir -> createDirectoryIfMissing True dir
-  LogMessage  msg -> do { putStrLn msg ; hFlush stdout }
+  LogMessage  msg -> do { putStrLn msg ; hFlush System.stdout }
   ReportProgress { outputProgress } ->
     for_ mbCounter \ counter -> do
       completed <-
@@ -272,7 +278,7 @@ script scriptCfg buildScript =
   Text.unlines ( header ++ concatMap ( stepScript scriptCfg ) ( buildSteps scriptCfg buildScript ) )
   where
     header, varsHelper, progressVars :: [ Text ]
-    header = [ "#!/bin/bash" , "" ] ++ varsHelper ++ progressVars
+    header = [ "#!/bin/bash" , "" ] ++ varsHelper ++ logDir ++ progressVars
     varsHelper
       | Shell { useVariables } <- scriptOutput scriptCfg
       , useVariables
@@ -284,6 +290,8 @@ script scriptCfg buildScript =
         Nothing -> []
         Just {} ->
           [ "buildEnvProgress=0" ]
+    logDir = [ "LOGDIR=\"$PWD/logs/$(date --utc +%Y-%m-%d_%H-%M-%S)\""
+             , "mkdir -p \"${LOGDIR}\"" ]
 
 -- | The underlying script of a build step.
 stepScript :: ScriptConfig -> BuildStep -> [ Text ]
@@ -310,22 +318,27 @@ stepScript scriptCfg = \case
                       <> "## %0" <> show n <> "d of " <> show tot <> " ##" <> "\\n "
                       <> replicate l '#' <> "\\n"
 
-  CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args } ) ->
+  CallProcess ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBasePath } ) ->
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
     [ "( cd " <> q cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
+    ++ logCommand
     ++
-    [ "  " <> cmd <> " )"
+    [ "  " <> cmd <> pipeToLogs <> " )"
     , resVar <> "=$?"
     , "if [ \"${" <> resVar <> "}\" -eq 0 ]"
     , "then true"
     , "else"
-    , "  echo \"callProcess failed with non-zero exit code. Command:\""
-    , "  echo \"  > \" " <> cmd
-    , "  echo \"CWD = \" " <> q cwd ]
+    , "  echo -e " <>
+        "\"callProcess failed with non-zero exit code. Command:\\n" <>
+        "  > " <> unquote cmd <> "\\n" <>
+        "  CWD = " <> unquote (q cwd) <> "\""
+      <> logErr
+    ]
     ++ progressReport
+    ++ logMsg
     ++
     [ "  exit \"${" <> resVar <> "}\""
     , "fi" ]
@@ -366,12 +379,31 @@ stepScript scriptCfg = \case
                         <> "=" <> Text.pack val <> " ; \\"
                                    -- (already quoted)
 
+      logCommand, logMsg :: [Text]
+      pipeToLogs, logErr :: Text
+      (logCommand, pipeToLogs, logErr, logMsg) =
+        case logBasePath of
+          Nothing      -> ( [], "", " >&2", [] )
+          Just logPath ->
+            let stdoutFile, stderrFile :: Text
+                stdoutFile = q ( logPath <.> "stdout" )
+                stderrFile = q ( logPath <.> "stderr" )
+            in ( [ "  echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
+               , " > " <> stdoutFile <> " 2> >( tee -a " <> stderrFile <> " >&2 )"
+                  -- Write stdout to the stdout log file.
+                  -- Write stderr both to the terminal and to the stderr log file.
+               , " | tee -a " <> stderrFile <> " >&2"
+               , [ "  echo \"Logs are available at: " <> unquote ( q ( logPath <> ".{stdout,stderr}" ) ) <> "\"" ] )
+
       progressReport :: [Text]
       progressReport =
         case scriptTotal scriptCfg of
           Nothing  -> []
           Just tot ->
             [ "  echo \"After ${buildEnvProgress} of " <> Text.pack (show tot) <> "\"" ]
+
+unquote :: Text -> Text
+unquote = Text.filter (not . (== '\"') )
 
 ----
 -- Helper to check that environment variables are set as expected.

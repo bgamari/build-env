@@ -1,5 +1,6 @@
 install/
 fetch/
+logs/
 *.json
 pkg1/dist/
 pkg2/dist/
