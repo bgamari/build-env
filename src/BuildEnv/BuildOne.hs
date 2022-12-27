@@ -100,17 +100,17 @@ setupPackage verbosity
        setupHs <- findSetupHs prepPkgDir
        return do
          scriptCfg <- askScriptConfig
-         let setupArgs = [ quoteArg scriptCfg (buildPkgDir </> setupHs)
+         let setupArgs = [ quoteArg ExpandVars scriptCfg ( buildPkgDir </> setupHs )
                          , "-o"
-                         , quoteArg scriptCfg (buildPkgDir </> "Setup")
-                         , "-package-db=" ++ quoteArg scriptCfg tempPkgDbDir
+                         , quoteArg ExpandVars scriptCfg ( buildPkgDir </> "Setup" )
+                         , "-package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg puSetupDepends
 
              -- Specify location of binaries and data directories.
              --
              -- See the commentary around 'depDataDirs' in 'buildUnit'.
-             binDirs = [ quoteArg scriptCfg $ installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
+             binDirs = [ quoteArg ExpandVars scriptCfg $ installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
                        | exeUnitId <- puExeDepends ]
              setupDepDataDirs =
                dataDirs scriptCfg paths
@@ -224,48 +224,59 @@ buildUnit verbosity
               | flagSpecIsEmpty flags
               -> []
               | otherwise
-              -> [ "--flags=" ++ quoteArg scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
+              -> [ "--flags=" <> quoteArg ExpandVars scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
+
+          -- NB: make sure to update the readme after changing
+          -- the arguments that are passed here.
+
+          -- Non-essential arguments (can be overriden by the user).
+          overridableConfigureArgs =
+            [ "--libdir="     <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "lib" )
+            , "--libsubdir="  <> thisUnit'sId
+            , "--dynlibdir="  <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "dynlib"  </> pkgNameVer )
+            , "--libexecdir=" <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "libexec" </> pkgNameVer )
+            , "--docdir="     <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "doc"     </> pkgNameVer )
+            , setupVerbosity verbosity
+            ] ++ flagsArg -- Flags shouldn't really be overridden,
+                          -- but we allow it as an expert feature.
 
           -- Set a different build directory for each unit,
           -- to avoid clashes when building multiple units from the same
           -- package concurrently.
-          buildDir = quoteArg scriptCfg -- Quote to escape \ on Windows.
+          buildDir = quoteArg ExpandVars scriptCfg -- Quote to escape \ on Windows.
                    $ "temp-build" </> thisUnit'sId
 
-          -- Set a different binDir for each executable unit,
-          -- so that we can know precisely which executables have been built
-          -- for the purpose of resumable builds.
-          thisUnit'sBinDir = quoteArg scriptCfg
-                           $ prefix </> "bin" </> thisUnit'sId
-            -- NB: use prefix not installDir here, otherwise the copy command
-            -- will duplicate destDir.
-          thisUnit'sBinDirArg
-            | Exe <- cuComponentType unit
-            = [ "--bindir=" ++ thisUnit'sBinDir ]
-            | otherwise
-            = []
+          -- Arguments essential to the build; can't be overriden by the user.
+          essentialConfigureArgs =
+            [ "--exact-configuration"
+            , "--with-compiler", quoteArg ExpandVars scriptCfg ghcPath
+            , "--prefix"       , quoteArg ExpandVars scriptCfg prefix
+            , "--cid="        <> Text.unpack ( unUnitId puId )
+            , "--package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
+            , "--datadir="    <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "share" )
+                -- Keep datadir in sync with the 'dataDirs' function.
+            , "--datasubdir=" <> pkgNameVer
+            , "--builddir="   <> buildDir
+            , "--bindir="     <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "bin" </> thisUnit'sId )
+                -- Set a different binDir for each executable unit,
+                -- so that we can know precisely which executables have been built
+                -- for the purpose of resumable builds.
+                -- Keep bindir in sync with 'binDirs' below.
+            ] ++ map ( dependencyArg plan unit ) puDepends
+              ++ [ buildTarget unit ]
+
+          configureArgs
+            =  overridableConfigureArgs
+            ++ userConfigureArgs
+            ++ essentialConfigureArgs
 
           -- Add the output binary directories to PATH, to satisfy executable
           -- dependencies during the build.
-          binDirs = [ quoteArg scriptCfg $
+          -- Keep this in sync with --bindir in essentialConfigureArgs.
+          binDirs = [ quoteArg ExpandVars scriptCfg $
                       installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
                     | exeUnitId <- puExeDepends ]
 
-            -- NB: make sure to update the readme after changing
-            -- the arguments that are passed here.
-          configureArgs = [ "--with-compiler", quoteArg scriptCfg ghcPath
-                          , "--prefix", quoteArg scriptCfg prefix
-                          , "--cid=" ++ Text.unpack (unUnitId puId)
-                          , "--package-db=" ++ quoteArg scriptCfg tempPkgDbDir
-                          , "--exact-configuration"
-                          , "--datasubdir=" ++ pkgNameVer
-                          , "--builddir=" ++ buildDir
-                          , setupVerbosity verbosity
-                          ] ++ thisUnit'sBinDirArg
-                            ++ flagsArg
-                            ++ map ( dependencyArg plan unit ) puDepends
-                            ++ userConfigureArgs
-                          ++ [ buildTarget unit ]
           setupExe = RelPath $ runCwdExe scriptCfg "Setup" -- relative to pkgDir
 
       logMessage verbosity Verbose $
@@ -289,7 +300,7 @@ buildUnit verbosity
         CP { cwd          = pkgDir
            , prog         = setupExe
            , args         = [ "build"
-                            , "--builddir=" ++ buildDir
+                            , "--builddir=" <> buildDir
                             , setupVerbosity verbosity ]
            , extraPATH    = binDirs
            , extraEnvVars = depDataDirs
@@ -305,9 +316,9 @@ buildUnit verbosity
           CP { cwd          = pkgDir
              , prog         = setupExe
              , args         = [ "haddock"
-                              , "--builddir=" ++ buildDir
                               , setupVerbosity verbosity ]
-                                ++ userHaddockArgs
+                              ++ userHaddockArgs
+                              ++ [ "--builddir=" <> buildDir ]
              , extraPATH    = binDirs
              , extraEnvVars = depDataDirs
              , logBasePath  = logPath
@@ -321,8 +332,8 @@ buildUnit verbosity
         CP { cwd          = pkgDir
            , prog         = setupExe
            , args         = [ "copy", setupVerbosity verbosity
-                            , "--builddir=" ++ buildDir
-                            , "--destdir", quoteArg scriptCfg destDir ]
+                            , "--builddir=" <> buildDir
+                            , "--destdir", quoteArg ExpandVars scriptCfg destDir ]
            , extraPATH    = []
            , extraEnvVars = []
            , logBasePath  = logPath
@@ -349,10 +360,10 @@ buildUnit verbosity
             callProcess $
               CP { cwd          = pkgDir
                  , prog         = setupExe
-                 , args         = [ "register", setupVerbosity verbosity
-                                  , "--builddir=" ++ buildDir
-                                  , "--gen-pkg-config=" ++ pkgRegsFile
-                                  ] ++ extraSetupArgs
+                 , args         = [ "register", setupVerbosity verbosity ]
+                                  ++ extraSetupArgs
+                                  ++ [ "--builddir=" <> buildDir
+                                     , "--gen-pkg-config=" <> pkgRegsFile ]
                  , extraPATH    = []
                  , extraEnvVars = []
                  , logBasePath  = logPath
@@ -368,10 +379,10 @@ buildUnit verbosity
               CP { cwd          = pkgDir
                  , prog         = AbsPath ghcPkgPath
                  , args         = [ "register"
-                                  , ghcPkgVerbosity verbosity
-                                  , "--package-db", quoteArg scriptCfg pkgDbDir
-                                  , pkgRegsFile ]
+                                  , ghcPkgVerbosity verbosity ]
                                   ++ extraPkgArgs
+                                  ++ [ "--package-db", quoteArg ExpandVars scriptCfg pkgDbDir
+                                     , pkgRegsFile ]
                  , extraPATH    = []
                  , extraEnvVars = []
                  , logBasePath  = logPath
@@ -387,7 +398,7 @@ buildUnit verbosity
 
 -- | The argument @-package-id PKG_ID@.
 unitIdArg :: UnitId -> String
-unitIdArg (UnitId unitId) = "-package-id " ++ Text.unpack unitId
+unitIdArg (UnitId unitId) = "-package-id " <> Text.unpack unitId
 
 -- | The target to configure and build.
 buildTarget :: ConfiguredUnit -> String
@@ -401,7 +412,7 @@ buildTarget ( ConfiguredUnit { puComponentName = comp } )
 -- available, ignoring any bounds in the cabal file.
 dependencyArg :: Map UnitId PlanUnit -> ConfiguredUnit -> UnitId -> String
 dependencyArg fullPlan unitWeAreBuilding depUnitId
-  = "--dependency=" ++ Text.unpack (mkDependency pu)
+  = "--dependency=" <> Text.unpack ( mkDependency pu )
   where
     pu :: PlanUnit
     pu = lookupDependency unitWeAreBuilding depUnitId fullPlan
@@ -426,8 +437,8 @@ lookupDependency ( ConfiguredUnit { puPkgName = pkgWeAreBuilding } ) depUnitId p
   = pu
   | otherwise
   = error $ "buildUnit: can't find dependency in build plan\n\
-            \package: " ++ show pkgWeAreBuilding ++ "\n\
-            \dependency: " ++ show depUnitId
+            \package: " <> show pkgWeAreBuilding <> "\n\
+            \dependency: " <> show depUnitId
 
 --------------------------------------------------------------------------------
 -- Directory structure computation helpers
@@ -556,14 +567,7 @@ dataDirs :: ScriptConfig
          -> [ ( String, FilePath ) ]
 dataDirs scriptCfg ( BuildPaths { installDir } ) units =
     [ ( mangledPkgName puPkgName <> "_datadir"
-      , quoteArg scriptCfg $
-          dataDir </> Text.unpack (pkgNameVersion puPkgName puVersion) )
+      , quoteArg ExpandVars scriptCfg $
+          installDir </> "share" </> Text.unpack (pkgNameVersion puPkgName puVersion) )
+        -- Keep this in sync with --datadir in essentialConfigureArgs.
     | ConfiguredUnit { puPkgName, puVersion } <- units ]
-  where
-    dataDir =
-      case scriptStyle scriptCfg of
-        WinStyle   -> installDir
-        PosixStyle -> installDir </> "share"
-      -- NB: this is the default value of 'datadir'.
-      -- If we want the user to be able to specify 'datadir', we should
-      -- make it into an explicit argument, like 'prefix' & 'destdir'.

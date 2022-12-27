@@ -347,7 +347,7 @@ cabalFetch verbosity cabal root pkgNmVer = do
 
 -- | Build a 'CabalPlan'. This will install all the packages in the plan
 -- by running their @Setup@ scripts. Libraries will be registered
--- into a local package database at @<install-dir>/package.conf@.
+-- into a local package database at @installDir/package.conf@.
 buildPlan :: Verbosity
           -> FilePath
               -- ^ Working directory.

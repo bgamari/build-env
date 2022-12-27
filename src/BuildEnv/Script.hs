@@ -34,7 +34,7 @@ module BuildEnv.Script
 
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
-  , quoteArg
+  , EscapeVars(..), quoteArg
 
   ) where
 
@@ -202,19 +202,30 @@ hostRunCfg mbTotal =
     , scriptStyle  = hostStyle
     , scriptTotal  = mbTotal }
 
+-- | Whether to expand or escape variables in a shell script.
+data EscapeVars
+  -- | Allow the shell to expand variables.
+  = ExpandVars
+  -- | Escape variables so that the shell doesn't expand them.
+  | EscapeVars
+  deriving stock Show
+
 -- | Quote a string, to avoid spaces causing the string
 -- to be interpreted as multiple arguments.
-q :: ( IsString r, Monoid r ) => String -> r
-q t = "\"" <> fromString (escapeArg t) <> "\""
+q :: ( IsString r, Monoid r ) => EscapeVars-> String -> r
+q escapeVars t = "\"" <> fromString ( escapeArg t ) <> "\""
   where
     escapeArg :: String -> String
     escapeArg = reverse . foldl' escape []
 
+    charsToEscape :: [ Char ]
+    charsToEscape = case escapeVars of
+      ExpandVars -> [ '\\', '\'', '"' ]
+      EscapeVars -> [ '\\', '\'', '"', '$' ]
+
     escape :: String -> Char -> String
     escape cs c
-      |  '\\' == c
-      || '\'' == c
-      || '"'  == c
+      | c `elem` charsToEscape
       = c:'\\':cs
       | otherwise
       = c:cs
@@ -224,11 +235,15 @@ q t = "\"" <> fromString (escapeArg t) <> "\""
 --
 -- No need to call this on the 'cwd' or 'prog' fields of 'CallProcess',
 -- as these will be quoted by the shell-script backend no matter what.
-quoteArg :: ( IsString r, Monoid r ) => ScriptConfig -> String -> r
-quoteArg ( ScriptConfig { scriptOutput } ) =
+quoteArg :: ( IsString r, Monoid r )
+         => EscapeVars
+         -> ScriptConfig
+         -> String
+         -> r
+quoteArg escapeVars ( ScriptConfig { scriptOutput } ) =
   case scriptOutput of
     Run      -> fromString
-    Shell {} -> q
+    Shell {} -> q escapeVars
 
 --------------------------------------------------------------------------------
 -- Interpretation
@@ -297,9 +312,9 @@ script scriptCfg buildScript =
 stepScript :: ScriptConfig -> BuildStep -> [ Text ]
 stepScript scriptCfg = \case
   CreateDir dir ->
-    [ "mkdir -p " <> q dir ]
+    [ "mkdir -p " <> q ExpandVars dir ]
   LogMessage str ->
-    [ "echo " <> q str ]
+    [ "echo " <> q ExpandVars str ]
   ReportProgress { outputProgress } ->
     case scriptTotal scriptCfg of
       Nothing
@@ -322,7 +337,7 @@ stepScript scriptCfg = \case
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
     logCommand ++
-    [ "( cd " <> q cwd <> " ; \\" ]
+    [ "( cd " <> q ExpandVars cwd <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
     ++
@@ -334,7 +349,7 @@ stepScript scriptCfg = \case
     , "  echo -e " <>
         "\"callProcess failed with non-zero exit code. Command:\\n" <>
         "  > " <> unquote cmd <> "\\n" <>
-        "  CWD = " <> unquote (q cwd) <> "\""
+        "  CWD = " <> unquote (q ExpandVars cwd) <> "\""
       <> logErr
     ]
     ++ progressReport
@@ -344,7 +359,7 @@ stepScript scriptCfg = \case
     , "fi" ]
     where
       cmd :: Text
-      cmd = q ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
+      cmd = q ExpandVars ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
         --         (1)                                         (2)
         --
         -- (1)
@@ -386,14 +401,14 @@ stepScript scriptCfg = \case
           Nothing      -> ( [], "", " >&2", [] )
           Just logPath ->
             let stdoutFile, stderrFile :: Text
-                stdoutFile = q ( logPath <.> "stdout" )
-                stderrFile = q ( logPath <.> "stderr" )
+                stdoutFile = q ExpandVars ( logPath <.> "stdout" )
+                stderrFile = q ExpandVars ( logPath <.> "stderr" )
             in ( [ "echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
                , " > " <> stdoutFile <> " 2> >( tee -a " <> stderrFile <> " >&2 )"
                   -- Write stdout to the stdout log file.
                   -- Write stderr both to the terminal and to the stderr log file.
                , " | tee -a " <> stderrFile <> " >&2"
-               , [ "  echo \"Logs are available at: " <> unquote ( q ( logPath <> ".{stdout,stderr}" ) ) <> "\"" ] )
+               , [ "  echo \"Logs are available at: " <> unquote ( q ExpandVars ( logPath <> ".{stdout,stderr}" ) ) <> "\"" ] )
 
       progressReport :: [Text]
       progressReport =
