@@ -1,6 +1,6 @@
 cabal-version: 3.0
 name:          build-env
-version:       1.0.0.0
+version:       1.1.0.0
 author:        Ben Gamari & Sam Derbyshire
 maintainer:    ben@smart-cactus.org
 license:       BSD-3-Clause
@@ -21,12 +21,7 @@ description:
   package database.
 
   In particular, __build-env__ enables bootstrapping of Haskell packages
-  in hermetic build environments without the use of @cabal-install@ or Stack.
-
-  It can be used as a library, or as an executable.
-
-  Please refer to the [readme](https://github.com/bgamari/build-env/readme.md)
-  for more information and usage examples.
+  in hermetic build environments, without the use of @cabal-install@ or Stack.
 
 common common
 

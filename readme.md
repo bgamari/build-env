@@ -26,7 +26,7 @@ in hermetic build environments.
 
 ```
 $ build-env build lens -f sources -o install -j8
-$ ghci -package-db install/package.conf/ -package lens
+$ ghci -package-db install/package.conf -package lens
 ghci> :ty Control.Lens.Lens
 Control.Lens.Lens
   :: Control.Lens.Type.Lens s t a b
@@ -65,6 +65,12 @@ $ build-env build -p lens-plan.json -f sources -o install -j8 --prefetched
 Being able to separate these steps affords us some extra flexibility, as
 subsequent sections will explain.
 
+Note: it is preferable to pass a previously computed build plan when calling
+`build-env build --prefetched`: an invocation of the form `build-env build a b c --prefetched`
+will compute a new build plan, and this build plan could be different from
+the plan that was previously fetched, for example if you have run `cabal update`
+in the meantime.
+
 ## What does `build-env` do?
 
 - **plan:** `build-env` calls `cabal build --dry-run` on a dummy
@@ -84,13 +90,12 @@ Note that, when building packages, `build-env` passes the following information
 when running the `Setup` script:
 
   - `with-compiler`, `prefix` and `destdir` options supplied by the user,
-  - the default `datadir` option,
-  - `cid`, `datasubdir`, `bindir` and `builddir` options supplied by `build-env`,
+  - `cid`, `datadir`, `datasubdir`, `bindir` and `builddir` options supplied by `build-env`,
   - package flags and `dependency` arguments, obtained from the build plan,
   - `<pkg>_datadir` environment variables supplied by `build-env`.
 
-Problems will likely arise if you pass extra arguments that override any of
-these, for example by using `--configure-arg ARG` on the command line.
+These options cannot be overridden. If you absolutely need to change some of
+these, please file a bug on the issue tracker asking for this customisability.
 
 ## Hermetic builds
 
@@ -138,7 +143,7 @@ Note that `--only` only affects which packages are built; it does not change
 the computation of the build plan nor which packages are fetched.
 
 You can also resume a build where it left off by passing `--resume`; this will
-avoid rebuilding any of the units that have already been registed in the
+avoid rebuilding any of the units that have already been registered in the
 package database.
 
 ## Bootstrapping
@@ -184,7 +189,7 @@ $ build-env fetch lens -f sources --output-plan myPlan.json
 Next, compute a build script containing references to variables:
 
 ```
-$ build-env build -p myPlan.json -f sources -o install --prefetched --configure-arg \$\{myArgs\} --script script.sh
+$ build-env build -p myPlan.json -f sources -o install --prefetched --configure-arg \$myArgs --script script.sh
 ```
 
 This will output a script which passes `$myArgs` to each `Setup configure`
