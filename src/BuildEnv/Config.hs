@@ -202,6 +202,8 @@ data Paths use
       -- a shell script that uses variables.
     }
 
+deriving stock instance Show ( BuildPaths use ) => Show ( Paths use )
+
 -- | The directory structure relevant to executing a build plan.
 type BuildPaths :: PathUsability -> Type
 data family BuildPaths use
@@ -212,6 +214,7 @@ data instance BuildPaths Raw
     , rawPrefix  :: !FilePath
       -- ^ Raw output build @prefix@ (might be relative).
     }
+  deriving stock Show
 data instance BuildPaths ForPrep
   = BuildPathsForPrep
     { compilerForPrep :: !Compiler
@@ -219,6 +222,7 @@ data instance BuildPaths ForPrep
     , installDir      :: !FilePath
       -- ^ Output installation directory @destdir/prefix@ (absolute).
     }
+  deriving stock Show
 data instance BuildPaths ForBuild
   = BuildPaths
     { compiler   :: !Compiler
@@ -232,6 +236,7 @@ data instance BuildPaths ForBuild
     , logDir     :: !FilePath
       -- ^ Directory in which to put logs.
     }
+  deriving stock Show
 
 -- | The appropriate stage at which to use a filepath.
 data PathUsability
