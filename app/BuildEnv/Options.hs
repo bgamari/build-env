@@ -8,6 +8,8 @@
 -- expected by the command-line interface of @build-env@.
 module BuildEnv.Options where
 
+import Data.Text (Text)
+
 -- containers
 import Data.Set
   ( Set )
@@ -73,6 +75,8 @@ data PlanInputs
       -- ^ Additional package constraints.
     , planAllowNewer :: AllowNewer
       -- ^ Allow-newer specification.
+    , planIndexState :: Maybe Text
+      -- ^ index-state specification.
     }
   deriving stock Show
 

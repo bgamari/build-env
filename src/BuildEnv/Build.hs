@@ -173,12 +173,19 @@ computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, p
 
 -- | The contents of a dummy @cabal.project@ file, specifying
 -- package constraints, flags and allow-newer.
-cabalProjectContentsFromPackages :: FilePath -> UnitSpecs -> PkgSpecs -> AllowNewer -> Text
-cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) =
+cabalProjectContentsFromPackages
+  :: FilePath
+  -> UnitSpecs
+  -> PkgSpecs
+  -> AllowNewer
+  -> Maybe Text
+  -> Text
+cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) indexState =
       packages
    <> allowNewers
    <> flagSpecs
    <> constraints
+   <> indexStateDecl
   where
 
     packages
@@ -232,6 +239,10 @@ cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) =
         , let flags = psFlags ps
         , not $ flagSpecIsEmpty flags
         ]
+
+    indexStateDecl
+      | Just date <- indexState = Text.unlines [ "index-state: " <> date ]
+      | otherwise = ""
 
 -- | The contents of a dummy Cabal file with dependencies on
 -- the specified units (without any constraints).
