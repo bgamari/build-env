@@ -120,12 +120,12 @@ jobs:
           cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -j8 -v2
           ghc-pkg --package-db=install/package.conf field comonad id
 
-      - name: "Build 'lens' (seed file & cabal.config)"
+      - name: "Build 'tagged' (seed file & cabal.config)"
         working-directory: ./tests/SEEDS
         shell: bash
         run: |
           cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -j8 -v2
-          ghc-pkg --package-db=install/package.conf field lens id
+          ghc-pkg --package-db=install/package.conf field tagged id
 
       - name: "Generate a build script for 'attoparsec' and run it"
         if: runner.os != 'Windows'
