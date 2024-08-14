@@ -54,7 +54,7 @@ parseCabalDotConfigPkgs fp = do
     outsideStanza pkgs []
       = pkgs
     outsideStanza pkgs (l:ls)
-      | Just rest <- Text.stripPrefix "constraints:" l
+      | Just rest <- Text.strip <$> Text.stripPrefix "constraints:" l
       = inConstraintsStanza (pkgs `addPkgFromLine` rest) ls
       | otherwise
       = outsideStanza pkgs ls
@@ -86,8 +86,7 @@ parseCabalDotConfigLine txt
   , validPackageName pkg
   = ( PkgName pkg, parsePkgSpec rest )
   | otherwise
-  = error $ "Invalid package in cabal.config file : " <> Text.unpack txt
-  where
+  = error $ "Invalid package in cabal.config file: " <> Text.unpack txt
 
 -- NB: update the readme after changing the documentation below.
 
