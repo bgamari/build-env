@@ -411,21 +411,16 @@ buildPlan verbosity workDir
     pkgDbDirs@( PkgDbDirsForBuild { finalPkgDbDir, tempPkgDbDir } )
       <- getPkgDbDirsForBuild pathsForBuild
 
-    -- Create the temporary package database, if it doesn't already exist.
-    --
-    -- See Note [Using two package databases] in BuildOne.
+    -- Check the temporary package database exists when it should,
+    -- and delete it if we are starting fresh.
     tempPkgDbExists <- doesDirectoryExist prepTempPkgDbDir
-    if
-      | resumeBuild && not tempPkgDbExists
-      -> error $
-          "Cannot resume build: no package database at " <> tempPkgDbDir
-      | not resumeBuild
-      -> do when tempPkgDbExists $
-              removeDirectoryRecursive tempPkgDbDir
-                `catch` \ ( _ :: IOException ) -> return ()
-            createDirectoryIfMissing True tempPkgDbDir
-      | otherwise
-      -> return ()
+    if | resumeBuild && not tempPkgDbExists
+       -> error $ "Cannot resume build: no package database at " <> tempPkgDbDir
+       | not resumeBuild && tempPkgDbExists
+       -> removeDirectoryRecursive tempPkgDbDir
+            `catch` \ ( _ :: IOException ) -> return ()
+       | otherwise
+       -> return ()
 
     mbEventLogDir <- for mbEventLogDir0 \ eventLogDir0 -> do
       eventLogDir <- canonicalizePath eventLogDir0
@@ -489,7 +484,7 @@ buildPlan verbosity workDir
           let pkgDirForPrep  = getPkgDir workDir pathsForPrep  pu
               pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           setupPackage verbosity compiler
-            paths pkgDbDirsForPrep pkgDirForPrep pkgDirForBuild
+            paths pkgDbDirs pkgDirForPrep pkgDirForBuild
             fullDepMap pu
 
         -- Build and install this unit.

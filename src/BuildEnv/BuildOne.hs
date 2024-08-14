@@ -76,7 +76,7 @@ import BuildEnv.Utils
 setupPackage :: Verbosity
              -> Compiler
              -> BuildPaths ForBuild -- ^ Overall build directory structure.
-             -> PkgDbDirs  ForPrep  -- ^ Package database directories (see 'getPkgDbDirs').
+             -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirs').
              -> PkgDir     ForPrep  -- ^ Package directory (to find the @Setup.hs@).
              -> PkgDir     ForBuild -- ^ Package directory (to build the @Setup.hs@).
              -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
@@ -85,7 +85,7 @@ setupPackage :: Verbosity
 setupPackage verbosity
              ( Compiler { ghcPath } )
              paths@( BuildPaths { installDir, logDir } )
-             ( PkgDbDirsForPrep { tempPkgDbDir } )
+             ( PkgDbDirsForBuild { tempPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
              ( PkgDir { pkgDir = buildPkgDir } )
              plan
