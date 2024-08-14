@@ -198,9 +198,9 @@ freeze modeDesc = FromFile <$> freezeFile
     helpStr :: String
     helpStr = modeDescription modeDesc <> " 'cabal.config' freeze file"
 
-indexState :: Parser (Maybe Text)
+indexState :: Parser ( Maybe IndexState )
 indexState =
-  optional $ fmap Text.pack $
+  optional $ fmap ( IndexState . Text.pack ) $
     option str ( long "index-state" <> help helpStr <> metavar "DATE" )
   where
     helpStr = "use Hackage state as of DATE, e.g. 2022-12-25T00:00:00Z"

@@ -178,9 +178,9 @@ cabalProjectContentsFromPackages
   -> UnitSpecs
   -> PkgSpecs
   -> AllowNewer
-  -> Maybe Text
+  -> Maybe IndexState
   -> Text
-cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) indexState =
+cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) mbIndexState =
       packages
    <> allowNewers
    <> flagSpecs
@@ -240,9 +240,10 @@ cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) inde
         , not $ flagSpecIsEmpty flags
         ]
 
-    indexStateDecl
-      | Just date <- indexState = Text.unlines [ "index-state: " <> date ]
-      | otherwise = ""
+    indexStateDecl = case mbIndexState of
+      Nothing -> ""
+      Just ( IndexState date ) ->
+        Text.unlines [ "index-state: " <> date ]
 
 -- | The contents of a dummy Cabal file with dependencies on
 -- the specified units (without any constraints).

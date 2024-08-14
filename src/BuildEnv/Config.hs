@@ -22,6 +22,9 @@ module BuildEnv.Config
     -- * @ghc@ and @cabal-install@ executables
   , Compiler(..), Cabal(..)
 
+    -- * Hackage index state
+  , IndexState(..)
+
     -- * Directory structure
   , Paths(..), BuildPaths(..)
   , PathUsability(..)
@@ -163,6 +166,13 @@ data Compiler =
            , ghcPkgPath :: !FilePath
            }
   deriving stock Show
+
+--------------------------------------------------------------------------------
+-- Cabal Hackage index state
+
+-- | Hackage index-state specification, e.g. 2022-12-25T00:00:00Z.
+newtype IndexState = IndexState Text
+  deriving newtype ( Show, Eq )
 
 --------------------------------------------------------------------------------
 -- Directory structure
