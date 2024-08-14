@@ -184,8 +184,9 @@ planInputs modeDesc = do
   planPins <- optional (freeze modeDesc)
   planUnits <- dependencies modeDesc
   planAllowNewer <- allowNewer
+  planIndexState <- indexState
 
-  pure $ PlanInputs { planPins, planUnits, planAllowNewer }
+  pure $ PlanInputs { planPins, planUnits, planAllowNewer, planIndexState }
 
 -- | Parse a list of pinned packages from a 'cabal.config' freeze file.
 freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
@@ -196,6 +197,13 @@ freeze modeDesc = FromFile <$> freezeFile
 
     helpStr :: String
     helpStr = modeDescription modeDesc <> " 'cabal.config' freeze file"
+
+indexState :: Parser (Maybe Text)
+indexState =
+  optional $ fmap Text.pack $
+    option str ( long "index-state" <> help helpStr <> metavar "DATE" )
+  where
+    helpStr = "use Hackage state as of DATE, e.g. 2022-12-25T00:00:00Z"
 
 -- | Parse @allow-newer@ options.
 allowNewer :: Parser AllowNewer

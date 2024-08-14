@@ -90,7 +90,8 @@ main = do
 --  - a @cabal.config@ freeze file,
 --  - explicit packages and allow-newer specified as command-line arguments.
 parsePlanInputs :: Verbosity -> FilePath -> PlanInputs -> IO CabalFilesContents
-parsePlanInputs verbosity workDir (PlanInputs { planPins, planUnits, planAllowNewer })
+parsePlanInputs verbosity workDir
+    (PlanInputs { planPins, planUnits, planAllowNewer, planIndexState })
   = do (pkgs, fileAllowNewer) <- parsePlanUnits verbosity planUnits
        let
          allAllowNewer = fileAllowNewer <> planAllowNewer
@@ -99,14 +100,17 @@ parsePlanInputs verbosity workDir (PlanInputs { planPins, planUnits, planAllowNe
          cabalContents = cabalFileContentsFromPackages pkgs
        projectContents <-
          case planPins of
-           Nothing -> return $ cabalProjectContentsFromPackages workDir pkgs Map.empty allAllowNewer
+           Nothing -> return $ cabalProjectContentsFromPackages workDir pkgs Map.empty
+             allAllowNewer planIndexState
            Just (FromFile pinCabalConfig) -> do
              normalMsg verbosity $
                "Reading 'cabal.config' file at '" <> Text.pack pinCabalConfig <> "'"
              pins <- parseCabalDotConfigPkgs pinCabalConfig
-             return $ cabalProjectContentsFromPackages workDir pkgs pins allAllowNewer
+             return $ cabalProjectContentsFromPackages workDir pkgs pins
+               allAllowNewer planIndexState
            Just (Explicit pins) -> do
-             return $ cabalProjectContentsFromPackages workDir pkgs pins allAllowNewer
+             return $ cabalProjectContentsFromPackages workDir pkgs pins
+               allAllowNewer planIndexState
        return $ CabalFilesContents { cabalContents, projectContents }
 
 -- | Retrieve the seed units we want to build, either from a seed file
