@@ -296,7 +296,8 @@ script scriptCfg buildScript =
   Text.unlines ( header ++ concatMap ( stepScript scriptCfg ) ( buildSteps scriptCfg buildScript ) )
   where
     header, varsHelper, progressVars :: [ Text ]
-    header = [ "#!/bin/bash" , "" ] ++ varsHelper ++ logDir ++ progressVars
+    header = [ "#!/bin/bash" , "", "set -ueo pipefail" ] ++
+      varsHelper ++ logDir ++ progressVars
     varsHelper
       | Shell { useVariables } <- scriptOutput scriptCfg
       , useVariables
@@ -407,7 +408,7 @@ stepScript scriptCfg = \case
                 stdoutFile = q ExpandVars ( logPath <.> "stdout" )
                 stderrFile = q ExpandVars ( logPath <.> "stderr" )
             in ( [ "echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
-               , " > " <> stdoutFile <> " 2> >( tee -a " <> stderrFile <> " >&2 )"
+               , " 2>&1 >" <> stdoutFile <> " | tee -a " <> stderrFile
                   -- Write stdout to the stdout log file.
                   -- Write stderr both to the terminal and to the stderr log file.
                , " | tee -a " <> stderrFile <> " >&2"
