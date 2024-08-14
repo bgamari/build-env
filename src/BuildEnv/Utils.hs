@@ -1,6 +1,8 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -18,11 +20,12 @@ module BuildEnv.Utils
       ProgPath(..), CallProcess(..), callProcessInIO
 
       -- * Create temporary directories
-    , TempDirPermanence(..), withTempDir
+    , TempDirPermanence(..)
+    , withTempDir
 
       -- * Abstract semaphores
     , AbstractSem(..)
-    , newAbstractSem, noSem, abstractQSem
+    , withNewAbstractSem, noSem, abstractQSem
 
       -- * Other utilities
     , splitOn
@@ -30,10 +33,10 @@ module BuildEnv.Utils
     ) where
 
 -- base
-import Control.Concurrent.QSem
-  ( QSem, newQSem, signalQSem, waitQSem )
 import Control.Exception
   ( bracket_ )
+import Control.Concurrent.QSem
+  ( QSem, newQSem, signalQSem, waitQSem )
 import Data.List
   ( intercalate )
 import Data.Maybe
@@ -70,6 +73,20 @@ import System.FilePath
 -- process
 import qualified System.Process as Proc
 
+#if BUILDENV_ENABLE_JSEM
+-- base
+import Control.Exception
+  ( bracket )
+
+-- semaphore-compat
+import qualified System.Semaphore as System
+  ( Semaphore(..), SemaphoreName(..)
+  , freshSemaphore, openSemaphore
+  , destroySemaphore
+  , waitOnSemaphore, releaseSemaphore
+  )
+#endif
+
 -- temporary
 import System.IO.Temp
     ( createTempDirectory
@@ -79,7 +96,9 @@ import System.IO.Temp
 
 -- build-env
 import BuildEnv.Config
-  ( AsyncSem(..), Args, TempDirPermanence(..), Counter(..)
+  ( Args, AsyncSem(..)
+  , Counter(..)
+  , TempDirPermanence(..)
   , pATHSeparator, hostStyle
   )
 
@@ -235,19 +254,54 @@ newtype AbstractSem =
   AbstractSem { withAbstractSem :: forall r. IO r -> IO r }
 
 -- | Create a semaphore-based acquire/release mechanism.
-newAbstractSem :: AsyncSem -> IO AbstractSem
-newAbstractSem whatSem =
+withNewAbstractSem :: AsyncSem
+                   -> ( AbstractSem -> Args -> IO r )
+                      -- ^ the abstract semaphore to use, and extra
+                      -- arguments to pass to @Setup configure@ for @ghc@
+                   -> IO r
+withNewAbstractSem whatSem f =
   case whatSem of
-    NoSem -> return noSem
+    NoSem -> f noSem []
     NewQSem n -> do
       qsem <- newQSem ( fromIntegral n )
-      return $ abstractQSem qsem
-
--- | Abstract acquire/release mechanism controlled by the given 'QSem'.
-abstractQSem :: QSem -> AbstractSem
-abstractQSem sem =
-  AbstractSem $ bracket_ (waitQSem sem) (signalQSem sem)
+      f ( abstractQSem qsem ) []
+#if BUILDENV_ENABLE_JSEM
+    NewJSem n ->
+      bracket
+        ( System.freshSemaphore "buildEnvSemaphore" ( fromIntegral n ) )
+        System.destroySemaphore
+        $ \ jsem -> do
+          let jsemName = System.semaphoreName jsem
+          f ( abstractJSem jsem ) [ jsemGhcArg jsemName ]
+    ExistingJSem jsemName -> do
+      let jsemNm = System.SemaphoreName jsemName
+      jsem <- System.openSemaphore jsemNm
+      f ( abstractJSem jsem ) [ jsemGhcArg jsemNm ]
+  where
+    jsemGhcArg :: System.SemaphoreName -> String
+    jsemGhcArg ( System.SemaphoreName jsemName ) =
+      "--ghc-option=-jsem=" <> jsemName
+#endif
 
 -- | No acquire/release mechanism required.
 noSem :: AbstractSem
 noSem = AbstractSem { withAbstractSem = id }
+
+-- | Abstract acquire/release mechanism controlled by the given 'QSem'.
+abstractQSem :: QSem -> AbstractSem
+abstractQSem sem =
+  AbstractSem $
+    bracket_
+      ( waitQSem   sem )
+      ( signalQSem sem )
+
+#if BUILDENV_ENABLE_JSEM
+-- | Abstract acquire/release mechanism controlled by the given
+-- system semaphore.
+abstractJSem :: System.Semaphore -> AbstractSem
+abstractJSem sem =
+  AbstractSem $
+    bracket_
+      ( System.waitOnSemaphore  sem )
+      ( System.releaseSemaphore sem 1 )
+#endif
