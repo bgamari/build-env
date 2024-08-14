@@ -100,12 +100,19 @@ setupPackage verbosity
        setupHs <- findSetupHs prepPkgDir
        return do
          scriptCfg <- askScriptConfig
-         let setupArgs = [ quoteArg ExpandVars scriptCfg ( buildPkgDir </> setupHs )
+         let isCabalDep uid = case Map.lookup uid plan of
+               Nothing -> error $ "setupPackage: cannot find setup dependency " ++ show uid
+               Just pu -> planUnitPkgName pu == PkgName "Cabal"
+             extraCabalSetupDep = not $ any isCabalDep puSetupDepends
+             setupArgs = [ quoteArg ExpandVars scriptCfg ( buildPkgDir </> setupHs )
                          , "-o"
                          , quoteArg ExpandVars scriptCfg ( buildPkgDir </> "Setup" )
                          , "-package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg puSetupDepends
+                           ++ [ "-package Cabal" | extraCabalSetupDep ]
+                              -- Add an implicit dependency on the 'Cabal' library
+                              -- if there isn't an explicit dependency on it.
 
              -- Specify location of binaries and data directories.
              --
