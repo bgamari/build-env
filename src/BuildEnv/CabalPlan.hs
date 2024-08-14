@@ -72,7 +72,7 @@ module BuildEnv.CabalPlan
 
 -- base
 import Data.Char
-  ( isAlphaNum )
+  ( isAlpha, isAlphaNum )
 import Data.Maybe
   ( fromMaybe, mapMaybe )
 import Data.Version
@@ -139,7 +139,11 @@ pkgNameVersion (PkgName n) v = n <> "-" <> Text.pack (showVersion v)
 -- | Is the string a valid @cabal@ package name? That is, does it consist
 -- only of alphanumeric identifiers and hyphens?
 validPackageName :: Text -> Bool
-validPackageName = Text.all ( \ x -> isAlphaNum x || x == '-' )
+validPackageName txt =
+     Text.all ( \ x -> isAlphaNum x || x == '-' ) txt
+  && case Text.uncons txt of
+      Nothing    -> False
+      Just (c,_) -> isAlpha c
 
 -- | A Cabal mangled package name, in which @-@ has been replaced with @_@.
 mangledPkgName :: PkgName -> String
