@@ -382,29 +382,13 @@ buildPlan verbosity workDir
   = do
     let paths@( BuildPaths { compiler, prefix, destDir, installDir } )
          = buildPaths pathsForBuild
-    -- Create the temporary package database, if it doesn't already exist.
-    -- We also create the final installation package database,
-    -- but this happens later, in (*), as part of the build script itself.
-    --
-    -- See Note [Using two package databases] in BuildOne.
-    let pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir } )
-          = getPkgDbDirsForPrep pathsForPrep
-    tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
 
-    if
-      | resumeBuild && not tempPkgDbExists
-      -> error $
-          "Cannot resume build: no package database at " <> tempPkgDbDir
-      | not resumeBuild
-      -> do when tempPkgDbExists $
-              removeDirectoryRecursive tempPkgDbDir
-                `catch` \ ( _ :: IOException ) -> return ()
-            createDirectoryIfMissing True tempPkgDbDir
-      | otherwise
-      -> return ()
-
-    pkgDbDirsForBuild@( PkgDbDirsForBuild { finalPkgDbDir } )
+    pkgDbDirsForBuild@( PkgDbDirsForBuild {
+      finalPkgDbDir, tempPkgDbDir = tempPkgDbDirForBuild } )
       <- getPkgDbDirsForBuild pathsForBuild
+
+    let pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir } )
+           = getPkgDbDirsForPrep pathsForPrep
 
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
@@ -418,7 +402,28 @@ buildPlan verbosity workDir
            in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirsForPrep fullDepMap
       else return Nothing
 
-    let -- Units to build, in dependency order.
+    let
+        -- Create the temporary package database, if it doesn't already exist.
+        -- We also create the final installation package database,
+        -- but this happens later, in (*), as part of the build script itself.
+        --
+        -- See Note [Using two package databases] in BuildOne.
+        createTmpPackageDb = do
+          tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
+
+          if
+            | resumeBuild && not tempPkgDbExists
+            -> error $
+                "Cannot resume build: no package database at " <> tempPkgDbDir
+            | not resumeBuild
+            -> do when tempPkgDbExists $
+                    removeDirectoryRecursive tempPkgDbDir
+                      `catch` \ ( _ :: IOException ) -> return ()
+                  createDirectoryIfMissing True tempPkgDbDir
+            | otherwise
+            -> return ()
+
+        -- Units to build, in dependency order.
         unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
         unitsToBuild
            = tagUnits $ sortPlan mbAlreadyBuilt mbOnlyBuildDepsOf cabalPlan
@@ -431,6 +436,11 @@ buildPlan verbosity workDir
           [ ((puPkgName, puVersion), cu)
           | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
           , isNothing didSetup ]
+
+        createTmpPackageDbScript = do
+          logMessage verbosity Verbose $
+            "Creating temporary package database at " <> tempPkgDbDirForBuild
+          createDir tempPkgDbDirForBuild
 
         -- Initial preparation: logging, and creating the final
         -- package database.
@@ -487,6 +497,7 @@ buildPlan verbosity workDir
                 Counter { counterRef = unitsBuiltCounterRef
                         , counterMax = nbUnitsToBuild }
 
+        createTmpPackageDb
         case runStrat of
 
           Async sem -> do
@@ -569,7 +580,7 @@ buildPlan verbosity workDir
           let build = unitBuildScript cu
           return $ mbSetup <> build
         Text.writeFile fp $ script scriptConfig $
-          preparation <> mconcat buildScripts <> finish
+          createTmpPackageDbScript <> preparation <> mconcat buildScripts <> finish
 
   where
 
