@@ -13,106 +13,138 @@ jobs:
     strategy:
       matrix:
         cfg:
-          - { os: ubuntu-latest  , ghc: "9.2" }
-          - { os: macOS-latest   , ghc: "9.2.4" }
-          - { os: windows-latest , ghc: "9.2" }
+          - { os: ubuntu-latest  , ghc: latest }
+          - { os: macOS-latest   , ghc: latest }
+          - { os: windows-latest , ghc: latest }
 
     steps:
-    - name: "Checkout commit"
-      uses: actions/checkout@v2
-      if: github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.ref == 'refs/heads/master'
 
-    - name: "Setup GHC & cabal"
-      uses: haskell/actions/setup@v1
-      with:
-        ghc-version: ${{ matrix.cfg.ghc }}
-        cabal-version: ${{ matrix.cfg.cabal }}
+      - uses: actions/checkout@v4
 
-    - name: "Build executable"
-      run: cabal build exe:build-env
+      - name: Set up GHC ${{ matrix.cfg.ghc }}
+        uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: ${{ matrix.cfg.ghc }}
+          # Defaults, added for clarity:
+          cabal-version: 'latest'
+          cabal-update: true
 
-    - name: "Build 'c2hs' executable (command line), and restart a build"
-      working-directory: ./tests/ExeDeps
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2 --output-plan c2hs-plan.json
-        rm -rf install/bin/alex*
-        rm -rf install/bin/c2hs*
-        ghc-pkg unregister dlist --package-db sources/package.conf
-        ghc-pkg unregister dlist --package-db install/package.conf
-        cabal run exe:build-env -- build --plan c2hs-plan.json -f sources -o install -v2 --resume
-        ghc-pkg --package-db=install/package.conf field dlist id
+      - name: "Configure"
+        run: |
+          cabal configure --enable-tests --enable-benchmarks --disable-documentation
+          cabal build all --dry-run
+        # The last step generates dist-newstyle/cache/plan.json for the cache key.
 
-    - name: "Refine a build"
-      working-directory: ./tests/Refine
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build shake -f sources -o install -v2 --only random
-        ghc-pkg --package-db=install/package.conf field random id
+      - name: "Restore cached dependencies"
+        uses: actions/cache/restore@v3
+        id: cache
+        env:
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ env.key }}-plan-${{ hashFiles('**/plan.json') }}
+          restore-keys: ${{ env.key }}-
 
-    - name: "Build 'haskell-src-exts' (test build-tool-depends datadir)"
-      working-directory: ./tests/ExeDataDir
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build haskell-src-exts -f sources -o install -v2
-        ghc-pkg --package-db=install/package.conf field haskell-src-exts id
+      - name: "Install dependencies"
+        # If we had an exact cache hit, the dependencies will be up to date.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cabal build exe:build-env --only-dependencies
 
-    - name: "Relocate and run a build script for 'free' (with local 'distributive')"
-      if: runner.os != 'Windows'
-      working-directory: ./tests/RelocatableScript
-      shell: bash
-      run: |
-        mkdir -p localpkgs
-        ( cd localpkgs ; cabal get distributive-0.6.2.1 )
-        cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources -o install --script build_free.sh --variables -v2
-        mkdir -p build
-        cp build_free.sh build/build_free.sh
-        cp -a sources   build/srcs
-        cp -a localpkgs build/localpkgs
-        cd build
-        export GHC=ghc
-        export GHCPKG=ghc-pkg
-        export SOURCES="$PWD"/srcs
-        export DESTDIR=/
-        export PREFIX="$PWD"/final
-        chmod +x build_free.sh
-        ./build_free.sh
-        ghc-pkg --package-db=final/package.conf field free id
+      # Cache dependencies already here, so that we do not have to rebuild them should the subsequent steps fail.
+      - name: "Save cached dependencies"
+        uses: actions/cache/save@v3
+        # If we had an exact cache hit, trying to save the cache would error because of key clash.
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
 
-    - name: "Plan, fetch and build 'comonad' (command line)"
-      working-directory: ./tests/PlanFetchBuild
-      shell: bash
-      run: |
-        cabal run exe:build-env -- plan comonad -p plan.json -v2
-        cabal run exe:build-env -- fetch -p plan.json -f sources -v2
-        cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -j8 -v2
-        ghc-pkg --package-db=install/package.conf field comonad id
+      - name: "Build build-env executable"
+        run: cabal build exe:build-env
 
-    - name: "Build 'lens' (seed file & cabal.config)"
-      working-directory: ./tests/SEEDS
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -j8 -v2
-        ghc-pkg --package-db=install/package.conf field lens id
+      - name: "Build 'c2hs' executable (command line), and restart a build"
+        working-directory: ./tests/ExeDeps
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build exe:c2hs -f sources -o install -v2 --output-plan c2hs-plan.json
+          rm -rf install/bin/alex*
+          rm -rf install/bin/c2hs*
+          ghc-pkg unregister dlist --package-db sources/package.conf
+          ghc-pkg unregister dlist --package-db install/package.conf
+          cabal run exe:build-env -- build --plan c2hs-plan.json -f sources -o install -v2 --resume
+          ghc-pkg --package-db=install/package.conf field dlist id
 
-    - name: "Generate a build script for 'attoparsec' and run it"
-      if: runner.os != 'Windows'
-      working-directory: ./tests/Script
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build attoparsec -f sources -o install --script build_atto.sh -v2
-        chmod +x build_atto.sh
-        ./build_atto.sh
-        ghc-pkg --package-db=install/package.conf field attoparsec id
+      - name: "Refine a build"
+        working-directory: ./tests/Refine
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build shake -f sources -o install -v2 --only random
+          ghc-pkg --package-db=install/package.conf field random id
 
-    - name: "Test building packages with multiple public libraries"
-      working-directory: ./tests/MultipleLibs
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local pkg1=pkg1 --local pkg2=pkg2 -j8
+      - name: "Build 'haskell-src-exts' (test build-tool-depends datadir)"
+        working-directory: ./tests/ExeDataDir
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build haskell-src-exts -f sources -o install -v2
+          ghc-pkg --package-db=install/package.conf field haskell-src-exts id
 
-    - name: "Bootstrap 'build-env'"
-      working-directory: ./tests/Bootstrap
-      shell: bash
-      run: |
-        cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local build-env=../.. -j8
+      - name: "Relocate and run a build script for 'free' (with local 'distributive')"
+        if: runner.os != 'Windows'
+        working-directory: ./tests/RelocatableScript
+        shell: bash
+        run: |
+          mkdir -p localpkgs
+          ( cd localpkgs ; cabal get distributive-0.6.2.1 )
+          cabal run exe:build-env -- build free --local distributive=localpkgs/distributive-0.6.2.1 -f sources -o install --script build_free.sh --variables -v2
+          mkdir -p build
+          cp build_free.sh build/build_free.sh
+          cp -a sources   build/srcs
+          cp -a localpkgs build/localpkgs
+          cd build
+          export GHC=ghc
+          export GHCPKG=ghc-pkg
+          export SOURCES="$PWD"/srcs
+          export DESTDIR=/
+          export PREFIX="$PWD"/final
+          chmod +x build_free.sh
+          ./build_free.sh
+          ghc-pkg --package-db=final/package.conf field free id
+
+      - name: "Plan, fetch and build 'comonad' (command line)"
+        working-directory: ./tests/PlanFetchBuild
+        shell: bash
+        run: |
+          cabal run exe:build-env -- plan comonad -p plan.json -v2
+          cabal run exe:build-env -- fetch -p plan.json -f sources -v2
+          cabal run exe:build-env -- build --prefetched -p plan.json -f sources -o install --configure-arg "--ghc-option=-haddock" -j8 -v2
+          ghc-pkg --package-db=install/package.conf field comonad id
+
+      - name: "Build 'lens' (seed file & cabal.config)"
+        working-directory: ./tests/SEEDS
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build --seeds seeds --freeze cabal.config -f sources -o install --haddock -j8 -v2
+          ghc-pkg --package-db=install/package.conf field lens id
+
+      - name: "Generate a build script for 'attoparsec' and run it"
+        if: runner.os != 'Windows'
+        working-directory: ./tests/Script
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build attoparsec -f sources -o install --script build_atto.sh -v2
+          chmod +x build_atto.sh
+          ./build_atto.sh
+          ghc-pkg --package-db=install/package.conf field attoparsec id
+
+      - name: "Test building packages with multiple public libraries"
+        working-directory: ./tests/MultipleLibs
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build pkg2:exe:Test -f fetch -o install --local pkg1=pkg1 --local pkg2=pkg2 -j8
+
+      - name: "Bootstrap 'build-env'"
+        working-directory: ./tests/Bootstrap
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build build-env:exe:build-env -f fetch -o install --local build-env=../.. -j8
