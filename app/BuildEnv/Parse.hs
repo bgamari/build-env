@@ -17,6 +17,8 @@ import Data.Bool
   ( bool )
 import System.Environment
   ( getArgs )
+import Text.Read
+  ( readMaybe )
 
 -- containers
 import qualified Data.Map.Strict as Map
@@ -349,20 +351,21 @@ newOrExisting =
 build :: Parser Build
 build = do
 
-  buildBuildPlan     <- plan Building
-  buildStart         <- optStart
-  buildStrategy      <- optStrategy
-  buildRawPaths      <- optRawPaths
-  userUnitArgs       <- optUnitArgs
-  mbOnlyDepsOf       <- optOnlyDepsOf
-
+  buildBuildPlan <- plan Building
+  buildStart     <- optStart
+  buildStrategy  <- optStrategy
+  buildRawPaths  <- optRawPaths
+  userUnitArgs   <- optUnitArgs
+  mbOnlyDepsOf   <- optOnlyDepsOf
+  eventLogDir    <- optEventLogDir
   pure $
     Build { buildStart
           , buildBuildPlan
           , buildStrategy
           , buildRawPaths
           , userUnitArgs
-          , mbOnlyDepsOf }
+          , mbOnlyDepsOf
+          , eventLogDir }
 
   where
 
@@ -374,11 +377,25 @@ build = do
 
     asyncSem :: Parser AsyncSem
     asyncSem =
-      option (fmap NewQSem auto <|> pure NoSem)
+      option jsem
+        (  long "jsem"
+        <> help "Use a system semaphore to control parallelism"
+        <> metavar "[N|SEM_NAME]" )
+      <|>
+      option ( fmap NewQSem auto )
         (  short 'j'
-        <> long "async"
         <> help "Use asynchronous package building"
         <> metavar "N" )
+      <|>
+      pure NoSem
+
+    jsem :: ReadM AsyncSem
+    jsem = do
+      x <- str
+      return $
+        case readMaybe x of
+          Just n  -> NewJSem n
+          Nothing -> ExistingJSem x
 
     optScript :: Parser BuildStrategy
     optScript = do
@@ -492,3 +509,11 @@ build = do
       then return $ PkgName nm
       else readerError $
             "Invalid package name: " <> Text.unpack nm
+
+    optEventLogDir :: Parser ( Maybe FilePath )
+    optEventLogDir = do
+        option (fmap Just str)
+          (  long "eventlogs"
+          <> help "Directory for GHC eventlogs"
+          <> value Nothing
+          <> metavar "OUTDIR" )

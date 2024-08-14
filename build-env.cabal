@@ -23,6 +23,15 @@ description:
   In particular, __build-env__ enables bootstrapping of Haskell packages
   in hermetic build environments, without the use of @cabal-install@ or Stack.
 
+flag jsem
+
+  description:
+    Enable support for parallelism semaphores
+  default:
+    True
+  manual:
+    False
+
 common common
 
     build-depends:
@@ -36,6 +45,8 @@ common common
          ^>= 1.3
       , filepath
           >= 1.4  && < 1.6
+      , semaphore-compat
+           ^>= 1.0.0
       , text
           >= 1.2  && < 2.2
 

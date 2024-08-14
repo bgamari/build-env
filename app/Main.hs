@@ -60,6 +60,7 @@ main = do
                         , buildStrategy
                         , buildRawPaths = rawPaths
                         , mbOnlyDepsOf
+                        , eventLogDir
                         , userUnitArgs } ) -> do
         plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
         ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
@@ -80,7 +81,7 @@ main = do
                   in Just $ mapMaybePlanUnits wantUnit plan
 
         let resumeBuild = case buildStart of { Resume -> True; _ -> False }
-        buildPlan verbosity workDir pathsForPrep pathsForBuild
+        buildPlan verbosity workDir pathsForPrep pathsForBuild eventLogDir
           buildStrategy resumeBuild mbOnlyDepsOfUnits userUnitArgs plan
 
 -- | Generate the contents of @pkg.cabal@ and @cabal.project@ files, using

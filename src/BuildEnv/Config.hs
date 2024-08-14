@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP #-}
+
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
@@ -106,6 +107,7 @@ data RunStrategy
   -- | Topologically sort the cabal build plan, and build the
   -- packages in sequence.
   = TopoSort
+
   -- | Asynchronously build all the packages, with each package
   -- waiting on its dependencies.
   | Async
@@ -123,6 +125,12 @@ data AsyncSem
   -- | Create a new 'Control.Concurrent.QSem.QSem' semaphore
   -- with the given number of tokens.
   | NewQSem !Word16
+  -- | __@jsem@ only:__ create a new system semaphore with the given number
+  -- of tokens, passing it to @ghc@ invocations.
+  | NewJSem !Word16
+  -- | __@jsem@ only:__ use an existing system semaphore,
+  -- passing it to @ghc@ invocations.
+  | ExistingJSem !String
   deriving stock Show
 
 -- | A description of the kind of semaphore we are using to control concurrency.
@@ -130,6 +138,9 @@ semDescription :: AsyncSem -> Text
 semDescription = \case
   NoSem     -> "no semaphore"
   NewQSem i -> "-j" <> Text.pack (show i)
+  NewJSem i -> "--jsem " <> Text.pack (show i)
+  ExistingJSem jsemName ->
+    "--jsem " <> Text.pack jsemName
 
 --------------------------------------------------------------------------------
 -- Arguments

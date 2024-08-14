@@ -139,6 +139,10 @@ data Build
     , mbOnlyDepsOf    :: Maybe ( Set PkgName )
       -- ^ @Just pkgs@ <=> only build @pkgs@ (and their dependencies).
       --   @Nothing@ <=> build all units in the build plan.
+    , eventLogDir     :: Maybe FilePath
+      -- ^ Optional output directory in which to output GHC eventlogs
+      -- for the build.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs
       -- ^ Extra per-unit arguments.
     }
+
