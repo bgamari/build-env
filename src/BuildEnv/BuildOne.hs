@@ -24,7 +24,7 @@ module BuildEnv.BuildOne
   , PkgDir(..)
   , getPkgDir
   , PkgDbDirs(..)
-  , getPkgDbDirsForPrep, getPkgDbDirsForBuild
+  , getPkgDbDirs
   ) where
 
 -- base
@@ -76,7 +76,7 @@ import BuildEnv.Utils
 setupPackage :: Verbosity
              -> Compiler
              -> BuildPaths ForBuild -- ^ Overall build directory structure.
-             -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
+             -> PkgDbDirs           -- ^ Package database directories (see 'getPkgDbDirs').
              -> PkgDir     ForPrep  -- ^ Package directory (to find the @Setup.hs@).
              -> PkgDir     ForBuild -- ^ Package directory (to build the @Setup.hs@).
              -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
@@ -85,7 +85,7 @@ setupPackage :: Verbosity
 setupPackage verbosity
              ( Compiler { ghcPath } )
              paths@( BuildPaths { installDir, logDir } )
-             ( PkgDbDirsForBuild { tempPkgDbDir } )
+             ( PkgDbDirs { tempPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
              ( PkgDir { pkgDir = buildPkgDir } )
              plan
@@ -172,7 +172,7 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 buildUnit :: Verbosity
           -> Compiler
           -> BuildPaths ForBuild -- ^ Overall build directory structure.
-          -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
+          -> PkgDbDirs           -- ^ Package database directories (see 'getPkgDbDirs').
           -> PkgDir     ForBuild -- ^ This package's directory (see 'getPkgDir').
           -> UnitArgs            -- ^ Extra arguments for this unit.
           -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
@@ -181,7 +181,7 @@ buildUnit :: Verbosity
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
           paths@( BuildPaths { installDir, prefix, destDir, logDir } )
-          ( PkgDbDirsForBuild
+          ( PkgDbDirs
             { tempPkgDbDir
             , finalPkgDbDir
             , tempPkgDbSem
@@ -464,16 +464,9 @@ haven't been copied over yet.
 -- | The package database directories.
 --
 -- See Note [Using two package databases].
-type PkgDbDirs :: PathUsability -> Type
-data family PkgDbDirs use
-
-data instance PkgDbDirs ForPrep
-  = PkgDbDirsForPrep
-    { tempPkgDbDir  :: !FilePath
-        -- ^ Local package database directory.
-    }
-data instance PkgDbDirs ForBuild
-  = PkgDbDirsForBuild
+type PkgDbDirs :: Type
+data PkgDbDirs
+  = PkgDbDirs
     { tempPkgDbDir  :: !FilePath
         -- ^ Local package database directory.
     , tempPkgDbSem  :: !QSem
@@ -487,24 +480,16 @@ data instance PkgDbDirs ForBuild
     }
 
 -- | Compute the paths of the package database directories we are going
--- to use.
---
--- See Note [Using two package databases].
-getPkgDbDirsForPrep :: Paths ForPrep -> PkgDbDirs ForPrep
-getPkgDbDirsForPrep ( Paths { fetchDir } ) =
-    PkgDbDirsForPrep { tempPkgDbDir = fetchDir </> "package.conf" }
-
--- | Compute the paths of the package database directories we are going
 -- to use, and create some semaphores to control access to them
 -- in order to avoid contention.
 --
 -- See Note [Using two package databases].
-getPkgDbDirsForBuild :: Paths ForBuild -> IO (PkgDbDirs ForBuild)
-getPkgDbDirsForBuild ( Paths { fetchDir, buildPaths = BuildPaths { installDir } } ) = do
+getPkgDbDirs :: Paths ForBuild -> IO PkgDbDirs
+getPkgDbDirs ( Paths { fetchDir, buildPaths = BuildPaths { installDir } } ) = do
   tempPkgDbSem  <- newQSem 1
   finalPkgDbSem <- newQSem 1
   return $
-    PkgDbDirsForBuild { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
+    PkgDbDirs { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
     where
       tempPkgDbDir  = fetchDir   </> "package.conf"
       finalPkgDbDir = installDir </> "package.conf"

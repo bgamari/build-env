@@ -1,5 +1,7 @@
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
 -- Module      :  BuildEnv.Script
@@ -30,7 +32,8 @@ module BuildEnv.Script
     -- ** Individual build steps
   , BuildStep(..), BuildSteps
   , step
-  , callProcess, createDir, logMessage, reportProgress
+  , callProcess, createDir, createTmpPkgDbDir
+  , logMessage, reportProgress
 
     -- ** Configuring build scripts
   , ScriptOutput(..), ScriptConfig(..), hostRunCfg
@@ -39,6 +42,8 @@ module BuildEnv.Script
   ) where
 
 -- base
+import Control.Exception
+  ( IOException, catch )
 import Control.Monad
   ( when )
 import Data.Foldable
@@ -56,7 +61,7 @@ import qualified System.IO as System
 
 -- directory
 import System.Directory
-  ( createDirectoryIfMissing )
+  ( createDirectoryIfMissing, doesDirectoryExist, removeDirectoryRecursive )
 
 -- filepath
 import System.FilePath
@@ -123,6 +128,8 @@ data BuildStep
   = CallProcess CallProcess
   -- | Create the given directory.
   | CreateDir   FilePath
+  -- | Create the temporary package database directory
+  | CreateTmpPkgDbDir FilePath
   -- | Log a message to @stdout@.
   | LogMessage  String
   -- | Report one unit of progress.
@@ -142,6 +149,10 @@ callProcess = step . CallProcess
 -- | Create the given directory.
 createDir :: FilePath -> BuildScript
 createDir = step . CreateDir
+
+-- | Create the temporary package database directory.
+createTmpPkgDbDir :: FilePath -> BuildScript
+createTmpPkgDbDir = step . CreateTmpPkgDbDir
 
 -- | Log a message.
 logMessage :: Verbosity -> Verbosity -> String -> BuildScript
@@ -253,20 +264,39 @@ quoteArg escapeVars ( ScriptConfig { scriptOutput } ) =
 
 -- | Execute a 'BuildScript' in the 'IO' monad.
 executeBuildScript :: Maybe Counter -- ^ Optional counter to use to report progress.
+                   -> Bool          -- ^ Resuming a previous build?
                    -> BuildScript   -- ^ The build script to execute.
                    -> IO ()
-executeBuildScript counter
-  = traverse_  ( executeBuildStep counter )
+executeBuildScript counter resumeBuild
+  = traverse_  ( executeBuildStep counter resumeBuild )
   . buildSteps ( hostRunCfg $ fmap counterMax counter )
 
 -- | Execute a single 'BuildStep' in the 'IO' monad.
 executeBuildStep :: Maybe Counter
                      -- ^ Optional counter to use to report progress.
+                 -> Bool
+                     -- ^ resumeBuild
                  -> BuildStep
                  -> IO ()
-executeBuildStep mbCounter = \case
+executeBuildStep mbCounter resumeBuild = \case
   CallProcess cp  -> callProcessInIO mbCounter cp
   CreateDir   dir -> createDirectoryIfMissing True dir
+  CreateTmpPkgDbDir tempPkgDbDir -> do
+    -- Create the temporary package database, if it doesn't already exist.
+    --
+    -- See Note [Using two package databases] in BuildOne.
+      tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
+      if
+        | resumeBuild && not tempPkgDbExists
+        -> error $
+            "Cannot resume build: no package database at " <> tempPkgDbDir
+        | not resumeBuild
+        -> do when tempPkgDbExists $
+                removeDirectoryRecursive tempPkgDbDir
+                  `catch` \ ( _ :: IOException ) -> return ()
+              createDirectoryIfMissing True tempPkgDbDir
+        | otherwise
+        -> return ()
   LogMessage  msg -> do { putStrLn msg ; hFlush System.stdout }
   ReportProgress { outputProgress } ->
     for_ mbCounter \ counter -> do
@@ -312,6 +342,8 @@ script scriptCfg buildScript =
 stepScript :: ScriptConfig -> BuildStep -> [ Text ]
 stepScript scriptCfg = \case
   CreateDir dir ->
+    [ "mkdir -p " <> q ExpandVars dir ]
+  CreateTmpPkgDbDir dir ->
     [ "mkdir -p " <> q ExpandVars dir ]
   LogMessage str ->
     [ "echo " <> q ExpandVars str ]

@@ -31,8 +31,6 @@ module BuildEnv.Build
   ) where
 
 -- base
-import Control.Exception
-  ( IOException, catch )
 import Control.Monad
   ( when )
 import Control.Monad.Fix
@@ -76,8 +74,8 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( createDirectoryIfMissing, doesDirectoryExist, doesFileExist
-  , exeExtension, listDirectory, removeDirectoryRecursive
+  ( doesDirectoryExist, doesFileExist
+  , exeExtension, listDirectory
   )
 
 -- filepath
@@ -100,7 +98,7 @@ import qualified Data.Text.IO as Text
 -- build-env
 import BuildEnv.BuildOne
   ( PkgDbDirs(..)
-  , getPkgDbDirsForPrep, getPkgDbDirsForBuild, getPkgDir
+  , getPkgDbDirs, getPkgDir
   , setupPackage, buildUnit )
 import BuildEnv.CabalPlan
 import qualified BuildEnv.CabalPlan as Configured
@@ -110,7 +108,8 @@ import BuildEnv.Script
   ( BuildScript, ScriptOutput(..), ScriptConfig(..)
   , emptyBuildScript
   , executeBuildScript, script
-  , createDir, logMessage
+  , createDir, createTmpPkgDbDir
+  , logMessage
   )
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
@@ -393,14 +392,10 @@ buildPlan verbosity workDir
           cabalPlan
   = do
     let paths@( BuildPaths { compiler, prefix, destDir, installDir } )
-         = buildPaths pathsForBuild
+          = buildPaths pathsForBuild
 
-    pkgDbDirsForBuild@( PkgDbDirsForBuild {
-      finalPkgDbDir, tempPkgDbDir = tempPkgDbDirForBuild } )
-      <- getPkgDbDirsForBuild pathsForBuild
-
-    let pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir } )
-           = getPkgDbDirsForPrep pathsForPrep
+    pkgDbDirs@( PkgDbDirs { finalPkgDbDir, tempPkgDbDir } )
+      <- getPkgDbDirs pathsForBuild
 
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
@@ -411,30 +406,10 @@ buildPlan verbosity workDir
     mbAlreadyBuilt <-
       if resumeBuild
       then let prepComp = compilerForPrep buildPathsForPrep
-           in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirsForPrep fullDepMap
+           in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirs fullDepMap
       else return Nothing
 
     let
-        -- Create the temporary package database, if it doesn't already exist.
-        -- We also create the final installation package database,
-        -- but this happens later, in (*), as part of the build script itself.
-        --
-        -- See Note [Using two package databases] in BuildOne.
-        createTmpPackageDb = do
-          tempPkgDbExists <- doesDirectoryExist tempPkgDbDir
-
-          if
-            | resumeBuild && not tempPkgDbExists
-            -> error $
-                "Cannot resume build: no package database at " <> tempPkgDbDir
-            | not resumeBuild
-            -> do when tempPkgDbExists $
-                    removeDirectoryRecursive tempPkgDbDir
-                      `catch` \ ( _ :: IOException ) -> return ()
-                  createDirectoryIfMissing True tempPkgDbDir
-            | otherwise
-            -> return ()
-
         -- Units to build, in dependency order.
         unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
         unitsToBuild
@@ -449,18 +424,16 @@ buildPlan verbosity workDir
           | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
           , isNothing didSetup ]
 
-        createTmpPackageDbScript = do
-          logMessage verbosity Verbose $
-            "Creating temporary package database at " <> tempPkgDbDirForBuild
-          createDir tempPkgDbDirForBuild
-
-        -- Initial preparation: logging, and creating the final
-        -- package database.
+        -- Initial preparation: logging, and creating the
+        -- temporary and final package databases.
         preparation :: BuildScript
         preparation = do
           logMessage verbosity Verbose $
+            "Creating temporary package database at " <> tempPkgDbDir
+          createTmpPkgDbDir tempPkgDbDir
+          logMessage verbosity Verbose $
             "Creating final package database at " <> finalPkgDbDir
-          createDir finalPkgDbDir -- (*)
+          createDir finalPkgDbDir
           logMessage verbosity Debug $ "Packages:\n" <>
             unlines
               [ "  - " <> Text.unpack (pkgNameVersion nm ver)
@@ -481,7 +454,7 @@ buildPlan verbosity workDir
           let pkgDirForPrep  = getPkgDir workDir pathsForPrep  pu
               pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           setupPackage verbosity compiler
-            paths pkgDbDirsForBuild pkgDirForPrep pkgDirForBuild
+            paths pkgDbDirs pkgDirForPrep pkgDirForBuild
             fullDepMap pu
 
         -- Build and install this unit.
@@ -489,7 +462,7 @@ buildPlan verbosity workDir
         unitBuildScript pu =
           let pkgDirForBuild = getPkgDir workDir pathsForBuild pu
           in buildUnit verbosity compiler
-                paths pkgDbDirsForBuild pkgDirForBuild
+                paths pkgDbDirs pkgDirForBuild
                 (userUnitArgs pu)
                 fullDepMap pu
 
@@ -509,14 +482,15 @@ buildPlan verbosity workDir
                 Counter { counterRef = unitsBuiltCounterRef
                         , counterMax = nbUnitsToBuild }
 
-        createTmpPackageDb
+            execBuildScript = executeBuildScript unitsBuiltCounter resumeBuild
+
         case runStrat of
 
           Async sem -> do
 
             normalMsg verbosity $
               "\nBuilding and installing units asynchronously with " <> semDescription sem
-            executeBuildScript unitsBuiltCounter preparation
+            execBuildScript preparation
 
             let unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
                 unitMap =
@@ -539,7 +513,7 @@ buildPlan verbosity workDir
                     -- Setup the package.
                     withAbstractSem do
                       setupScript <- unitSetupScript cu
-                      executeBuildScript unitsBuiltCounter setupScript
+                      execBuildScript setupScript
 
                   -- Configure, build and install the unit.
                   doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
@@ -557,7 +531,7 @@ buildPlan verbosity workDir
 
                     -- Build the unit!
                     withAbstractSem $
-                      executeBuildScript unitsBuiltCounter $ unitBuildScript pu
+                      execBuildScript $ unitBuildScript pu
 
               -- Kick off setting up the packages...
               finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
@@ -565,17 +539,17 @@ buildPlan verbosity workDir
               finalUnitAsyncs <- for unitMap (async . doUnitAsync)
               return (finalPkgAsyncs, finalUnitAsyncs)
             mapM_ wait unitAsyncs
-            executeBuildScript unitsBuiltCounter finish
+            execBuildScript finish
 
           TopoSort -> do
             normalMsg verbosity "\nBuilding and installing units sequentially.\n\
                                 \NB: pass -j<N> for increased parallelism."
-            executeBuildScript unitsBuiltCounter preparation
+            execBuildScript preparation
             for_ unitsToBuild \ ( cu, didSetup ) -> do
               when (isNothing didSetup) $
-                unitSetupScript cu >>= executeBuildScript unitsBuiltCounter
-              executeBuildScript unitsBuiltCounter (unitBuildScript cu)
-            executeBuildScript unitsBuiltCounter finish
+                unitSetupScript cu >>= execBuildScript
+              execBuildScript (unitBuildScript cu)
+            execBuildScript finish
 
       Script { scriptPath = fp, useVariables } -> do
         let scriptConfig :: ScriptConfig
@@ -592,7 +566,7 @@ buildPlan verbosity workDir
           let build = unitBuildScript cu
           return $ mbSetup <> build
         Text.writeFile fp $ script scriptConfig $
-          createTmpPackageDbScript <> preparation <> mconcat buildScripts <> finish
+          preparation <> mconcat buildScripts <> finish
 
   where
 
@@ -687,13 +661,13 @@ tagUnits = go Map.empty
 getInstalledUnits :: Verbosity
                   -> Compiler
                   -> BuildPaths ForPrep
-                  -> PkgDbDirs ForPrep
+                  -> PkgDbDirs
                   -> Map UnitId PlanUnit
                   -> IO ( Set UnitId )
 getInstalledUnits verbosity
                   ( Compiler { ghcPkgPath } )
                   ( BuildPathsForPrep { installDir } )
-                  ( PkgDbDirsForPrep { tempPkgDbDir } )
+                  ( PkgDbDirs { tempPkgDbDir } )
                   plan = do
   pkgVerUnitIds <-
     words <$>
