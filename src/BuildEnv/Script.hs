@@ -309,7 +309,7 @@ script scriptCfg buildScript =
         Nothing -> []
         Just {} ->
           [ "buildEnvProgress=0" ]
-    logDir = [ "LOGDIR=\"$PWD/logs/$(date --utc +%Y-%m-%d_%H-%M-%S)\""
+    logDir = [ "LOGDIR=\"$PWD/logs/$(date -u +%Y-%m-%d_%H-%M-%S)\""
              , "mkdir -p \"${LOGDIR}\"" ]
 
 -- | The underlying script of a build step.
