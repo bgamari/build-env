@@ -402,7 +402,7 @@ buildPlan verbosity workDir
           userUnitArgs
           cabalPlan
   = do
-    let paths@( BuildPaths { compiler, prefix, destDir, installDir } )
+    let paths@( BuildPaths { compiler, prefix, installDir } )
           = buildPaths pathsForBuild
 
         pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir = prepTempPkgDbDir } )
@@ -430,7 +430,6 @@ buildPlan verbosity workDir
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
                    , "      prefix: " <> Text.pack prefix
-                   , "     destDir: " <> Text.pack destDir
                    , "  installDir: " <> Text.pack installDir ]
 
     mbAlreadyBuilt <-

@@ -227,8 +227,6 @@ data instance BuildPaths ForBuild
   = BuildPaths
     { compiler   :: !Compiler
       -- ^ Which @ghc@ and @ghc-pkg@ to use.
-    , destDir    :: !FilePath
-      -- ^ Output build @destdir@ (absolute).
     , prefix     :: !FilePath
       -- ^ Output build @prefix@ (absolute).
     , installDir :: !FilePath
@@ -264,7 +262,6 @@ canonicalizePaths compiler buildStrat
   = do
       fetchDir   <- canonicalizePath fetchDir0
       prefix     <- canonicalizePath rawPrefix
-      destDir    <- canonicalizePath rawDestDir
       installDir <- canonicalizePath ( rawDestDir </> dropDrive prefix )
         -- We must use dropDrive here. Quoting from the documentation of (</>):
         --
@@ -288,7 +285,6 @@ canonicalizePaths compiler buildStrat
                        , buildPaths =
                          BuildPaths
                            { prefix     = "${PREFIX}"
-                           , destDir    = "${DESTDIR}"
                            , installDir = "${DESTDIR}" </> "${PREFIX}"
                            , logDir
                            , compiler =
@@ -297,7 +293,7 @@ canonicalizePaths compiler buildStrat
             _don'tUseVars ->
               Paths { fetchDir
                     , buildPaths =
-                      BuildPaths { compiler, destDir, prefix, installDir, logDir } }
+                      BuildPaths { compiler, prefix, installDir, logDir } }
       return $
         ( Paths { fetchDir
                 , buildPaths =

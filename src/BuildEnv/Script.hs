@@ -215,7 +215,7 @@ data EscapeVars
 
 -- | Quote a string, to avoid spaces causing the string
 -- to be interpreted as multiple arguments.
-q :: ( IsString r, Monoid r ) => EscapeVars-> String -> r
+q :: ( IsString r, Monoid r ) => EscapeVars -> String -> r
 q escapeVars t = "\"" <> fromString ( escapeArg t ) <> "\""
   where
     escapeArg :: String -> String
