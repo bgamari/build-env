@@ -103,8 +103,8 @@ import qualified Data.Text.IO as Text
 
 -- build-env
 import BuildEnv.BuildOne
-  ( PkgDbDirs(..)
-  , getPkgDbDirsForPrep, getPkgDbDirsForBuild
+  ( PkgDbDir(..)
+  , getPkgDbDirForPrep, getPkgDbDirForBuild
   , getPkgDir
   , setupPackage, buildUnit
   )
@@ -405,19 +405,19 @@ buildPlan verbosity workDir
     let paths@( BuildPaths { compiler, prefix, installDir } )
           = buildPaths pathsForBuild
 
-        pkgDbDirsForPrep@( PkgDbDirsForPrep { tempPkgDbDir = prepTempPkgDbDir } )
-          = getPkgDbDirsForPrep pathsForPrep
+        pkgDbDirForPrep
+          = getPkgDbDirForPrep pathsForPrep
 
-    pkgDbDirs@( PkgDbDirsForBuild { finalPkgDbDir, tempPkgDbDir } )
-      <- getPkgDbDirsForBuild pathsForBuild
+    pkgDbDirs@( PkgDbDirForBuild { finalPkgDbDir } )
+      <- getPkgDbDirForBuild pathsForBuild
 
-    -- Check the temporary package database exists when it should,
+    -- Check the package database exists when it should,
     -- and delete it if we are starting fresh.
-    tempPkgDbExists <- doesDirectoryExist prepTempPkgDbDir
-    if | resumeBuild && not tempPkgDbExists
-       -> error $ "Cannot resume build: no package database at " <> tempPkgDbDir
-       | not resumeBuild && tempPkgDbExists
-       -> removeDirectoryRecursive tempPkgDbDir
+    finalPkgDbExists <- doesDirectoryExist finalPkgDbDir
+    if | resumeBuild && not finalPkgDbExists
+       -> error $ "Cannot resume build: no package database at " <> finalPkgDbDir
+       | not resumeBuild && finalPkgDbExists
+       -> removeDirectoryRecursive finalPkgDbDir
             `catch` \ ( _ :: IOException ) -> return ()
        | otherwise
        -> return ()
@@ -435,7 +435,7 @@ buildPlan verbosity workDir
     mbAlreadyBuilt <-
       if resumeBuild
       then let prepComp = compilerForPrep buildPathsForPrep
-           in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirsForPrep fullDepMap
+           in Just <$> getInstalledUnits verbosity prepComp buildPathsForPrep pkgDbDirForPrep fullDepMap
       else return Nothing
 
     let
@@ -453,15 +453,11 @@ buildPlan verbosity workDir
           | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
           , isNothing didSetup ]
 
-        -- Initial preparation: logging, and creating the
-        -- temporary and final package databases.
+        -- Initial preparation: logging, and creating the package database.
         preparation :: BuildScript
         preparation = do
           logMessage verbosity Verbose $
-            "Creating temporary package database at " <> tempPkgDbDir
-          createDir tempPkgDbDir
-          logMessage verbosity Verbose $
-            "Creating final package database at " <> finalPkgDbDir
+            "Creating package database at " <> finalPkgDbDir
           createDir finalPkgDbDir
           logMessage verbosity Debug $ "Packages:\n" <>
             unlines
@@ -700,13 +696,13 @@ tagUnits = go Map.empty
 getInstalledUnits :: Verbosity
                   -> Compiler
                   -> BuildPaths ForPrep
-                  -> PkgDbDirs ForPrep
+                  -> PkgDbDir ForPrep
                   -> Map UnitId PlanUnit
                   -> IO ( Set UnitId )
 getInstalledUnits verbosity
                   ( Compiler { ghcPkgPath } )
                   ( BuildPathsForPrep { installDir } )
-                  ( PkgDbDirsForPrep { tempPkgDbDir } )
+                  ( PkgDbDirForPrep { finalPkgDbDir } )
                   plan = do
   pkgVerUnitIds <-
     words <$>
@@ -714,7 +710,7 @@ getInstalledUnits verbosity
       [ "list"
       , ghcPkgVerbosity verbosity
       , "--show-unit-ids", "--simple-output"
-      , "--package-db", tempPkgDbDir ]
+      , "--package-db", finalPkgDbDir ]
         -- TODO: allow user package databases too?
       ""
   let installedLibs = map ( UnitId . Text.pack ) pkgVerUnitIds
