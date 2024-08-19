@@ -187,7 +187,7 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
-          paths@( BuildPaths { installDir, prefix, destDir, logDir } )
+          paths@( BuildPaths { installDir, prefix, logDir } )
           ( PkgDbDirsForBuild
             { tempPkgDbDir
             , finalPkgDbDir
@@ -217,13 +217,14 @@ buildUnit verbosity
       let -- Specify the data directories for all dependencies,
           -- including executable dependencies (see (**)).
           -- This is important so that e.g. 'happy' can find its datadir.
-          depDataDirs =
+          setupEnvVars =
             dataDirs scriptCfg paths
               [ dep_cu
               | depUnitId <- unitDepends unit -- (**) depends ++ exeDepends
               , let dep = lookupDependency unit depUnitId plan
               , dep_cu <- maybeToList $ configuredUnitMaybe dep
               ]
+              ++ [ ("prefix", quoteArg ExpandVars scriptCfg prefix) ]
 
       -- Configure
       let flagsArg = case puFlags unit of
@@ -257,7 +258,7 @@ buildUnit verbosity
           essentialConfigureArgs =
             [ "--exact-configuration"
             , "--with-compiler", quoteArg ExpandVars scriptCfg ghcPath
-            , "--prefix"       , quoteArg ExpandVars scriptCfg prefix
+            , "--prefix"       , quoteArg EscapeVars scriptCfg "${pkgroot}"
             , "--cid="        <> Text.unpack ( unUnitId puId )
             , "--package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
             , "--datadir="    <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "share" )
@@ -295,7 +296,7 @@ buildUnit verbosity
            , prog         = setupExe
            , args         = "configure" : configureArgs
            , extraPATH    = binDirs
-           , extraEnvVars = depDataDirs -- Not sure this is needed for 'Setup configure'.
+           , extraEnvVars = setupEnvVars
            , logBasePath  = logPath
            , sem          = noSem
            }
@@ -310,7 +311,7 @@ buildUnit verbosity
                             , "--builddir=" <> buildDir
                             , setupVerbosity verbosity ]
            , extraPATH    = binDirs
-           , extraEnvVars = depDataDirs
+           , extraEnvVars = setupEnvVars
            , logBasePath  = logPath
            , sem          = noSem
            }
@@ -327,7 +328,7 @@ buildUnit verbosity
                               ++ userHaddockArgs
                               ++ [ "--builddir=" <> buildDir ]
              , extraPATH    = binDirs
-             , extraEnvVars = depDataDirs
+             , extraEnvVars = setupEnvVars
              , logBasePath  = logPath
              , sem          = noSem
              }
@@ -340,9 +341,10 @@ buildUnit verbosity
            , prog         = setupExe
            , args         = [ "copy", setupVerbosity verbosity
                             , "--builddir=" <> buildDir
-                            , "--destdir", quoteArg ExpandVars scriptCfg destDir ]
+                            , "--target-package-db=" <> quoteArg ExpandVars scriptCfg (installDir </> "package.conf")
+                            ]
            , extraPATH    = []
-           , extraEnvVars = []
+           , extraEnvVars = setupEnvVars
            , logBasePath  = logPath
            , sem          = noSem
            }
