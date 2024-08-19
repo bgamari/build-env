@@ -23,8 +23,8 @@ module BuildEnv.BuildOne
 
   , PkgDir(..)
   , getPkgDir
-  , PkgDbDirs(..)
-  , getPkgDbDirsForPrep, getPkgDbDirsForBuild,
+  , PkgDbDir(..)
+  , getPkgDbDirForPrep, getPkgDbDirForBuild,
   ) where
 
 -- base
@@ -76,7 +76,7 @@ import BuildEnv.Utils
 setupPackage :: Verbosity
              -> Compiler
              -> BuildPaths ForBuild -- ^ Overall build directory structure.
-             -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirs').
+             -> PkgDbDir   ForBuild -- ^ Package database directory (see 'getPkgDbDirForBuild').
              -> PkgDir     ForPrep  -- ^ Package directory (to find the @Setup.hs@).
              -> PkgDir     ForBuild -- ^ Package directory (to build the @Setup.hs@).
              -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
@@ -85,7 +85,7 @@ setupPackage :: Verbosity
 setupPackage verbosity
              ( Compiler { ghcPath } )
              paths@( BuildPaths { installDir, logDir } )
-             ( PkgDbDirsForBuild { tempPkgDbDir } )
+             ( PkgDbDirForBuild { finalPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
              ( PkgDir { pkgDir = buildPkgDir } )
              plan
@@ -107,7 +107,7 @@ setupPackage verbosity
              setupArgs = [ quoteArg ExpandVars scriptCfg ( buildPkgDir </> setupHs )
                          , "-o"
                          , quoteArg ExpandVars scriptCfg ( buildPkgDir </> "Setup" )
-                         , "-package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
+                         , "-package-db=" <> quoteArg ExpandVars scriptCfg finalPkgDbDir
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg puSetupDepends
                            ++ [ "-package Cabal" | extraCabalSetupDep ]
@@ -179,7 +179,7 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 buildUnit :: Verbosity
           -> Compiler
           -> BuildPaths ForBuild -- ^ Overall build directory structure.
-          -> PkgDbDirs  ForBuild -- ^ Package database directories (see 'getPkgDbDirsForBuild').
+          -> PkgDbDir   ForBuild -- ^ Package database directory (see 'getPkgDbDirForBuild').
           -> PkgDir     ForBuild -- ^ This package's directory (see 'getPkgDir').
           -> UnitArgs            -- ^ Extra arguments for this unit.
           -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
@@ -188,10 +188,8 @@ buildUnit :: Verbosity
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
           paths@( BuildPaths { installDir, prefix, logDir } )
-          ( PkgDbDirsForBuild
-            { tempPkgDbDir
-            , finalPkgDbDir
-            , tempPkgDbSem
+          ( PkgDbDirForBuild
+            { finalPkgDbDir
             , finalPkgDbSem } )
           ( PkgDir { pkgDir, pkgNameVer } )
           ( UnitArgs { configureArgs = userConfigureArgs
@@ -258,9 +256,9 @@ buildUnit verbosity
           essentialConfigureArgs =
             [ "--exact-configuration"
             , "--with-compiler", quoteArg ExpandVars scriptCfg ghcPath
-            , "--prefix"       , quoteArg EscapeVars scriptCfg "${pkgroot}"
+            , "--prefix"       , quoteArg ExpandVars scriptCfg prefix
             , "--cid="        <> Text.unpack ( unUnitId puId )
-            , "--package-db=" <> quoteArg ExpandVars scriptCfg tempPkgDbDir
+            , "--package-db=" <> quoteArg ExpandVars scriptCfg finalPkgDbDir
             , "--datadir="    <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "share" )
                 -- Keep datadir in sync with the 'dataDirs' function.
             , "--datasubdir=" <> pkgNameVer
@@ -352,53 +350,48 @@ buildUnit verbosity
        -- Register
       case cuComponentType unit of
         Lib -> do
-          -- Register library (in both the local and final package databases)
-          -- See Note [Using two package databases].
+          -- Register library.
           let pkgRegsFile = thisUnit'sId <> "-pkg-reg.conf"
-              dirs = [ ( tempPkgDbDir,  tempPkgDbSem, "temporary", ["--inplace"], [])
-                     , (finalPkgDbDir, finalPkgDbSem, "final"    , [], "--force" : userGhcPkgArgs) ]
 
-          for_ dirs \ (pkgDbDir, pkgDbSem, desc, extraSetupArgs, extraPkgArgs) -> do
+          logMessage verbosity Verbose $
+           mconcat [ "Registering ", unitPrintableName
+                   , " in package database at:\n  "
+                   , finalPkgDbDir ]
 
-            logMessage verbosity Verbose $
-             mconcat [ "Registering ", unitPrintableName, " in "
-                     , desc, " package database at:\n  "
-                     , pkgDbDir ]
+          -- Setup register
+          callProcess $
+            CP { cwd          = pkgDir
+               , prog         = setupExe
+               , args         = [ "register", setupVerbosity verbosity
+                                , "--builddir=" <> buildDir
+                                , "--gen-pkg-config=" <> pkgRegsFile ]
+               , extraPATH    = []
+               , extraEnvVars = []
+               , logBasePath  = logPath
+               , sem          = noSem
+               }
 
-            -- Setup register
-            callProcess $
-              CP { cwd          = pkgDir
-                 , prog         = setupExe
-                 , args         = [ "register", setupVerbosity verbosity ]
-                                  ++ extraSetupArgs
-                                  ++ [ "--builddir=" <> buildDir
-                                     , "--gen-pkg-config=" <> pkgRegsFile ]
-                 , extraPATH    = []
-                 , extraEnvVars = []
-                 , logBasePath  = logPath
-                 , sem          = noSem
-                 }
+          -- NB: we have configured & built a single target,
+          -- so there should be a single "pkg-reg.conf" file,
+          -- and not a directory of registration files.
 
-            -- NB: we have configured & built a single target,
-            -- so there should be a single "pkg-reg.conf" file,
-            -- and not a directory of registration files.
-
-            -- ghc-pkg register
-            callProcess $
-              CP { cwd          = pkgDir
-                 , prog         = AbsPath ghcPkgPath
-                 , args         = [ "register"
-                                  , ghcPkgVerbosity verbosity ]
-                                  ++ extraPkgArgs
-                                  ++ [ "--package-db", quoteArg ExpandVars scriptCfg pkgDbDir
-                                     , pkgRegsFile ]
-                 , extraPATH    = []
-                 , extraEnvVars = []
-                 , logBasePath  = logPath
-                 , sem          = abstractQSem pkgDbSem
-                   -- Take a lock to avoid contention on the package database
-                   -- when building units concurrently.
-                 }
+          -- ghc-pkg register
+          callProcess $
+            CP { cwd          = pkgDir
+               , prog         = AbsPath ghcPkgPath
+               , args         = [ "register"
+                                , ghcPkgVerbosity verbosity
+                                , "--force" ]
+                                ++ userGhcPkgArgs
+                                ++ [ "--package-db", quoteArg ExpandVars scriptCfg finalPkgDbDir
+                                   , pkgRegsFile ]
+               , extraPATH    = []
+               , extraEnvVars = []
+               , logBasePath  = logPath
+               , sem          = abstractQSem finalPkgDbSem
+                 -- Take a lock to avoid contention on the package database
+                 -- when building units concurrently.
+               }
 
         _notALib -> return ()
 
@@ -452,70 +445,39 @@ lookupDependency ( ConfiguredUnit { puPkgName = pkgWeAreBuilding } ) depUnitId p
 --------------------------------------------------------------------------------
 -- Directory structure computation helpers
 
-{- $twoDBs
-__Note [Using two package databases]__
+-- | The package database directory.
+type PkgDbDir :: PathUsability -> Type
+data family PkgDbDir use
 
-We need __two__ distinct package databases: we might want to perform the build
-in a temporary location, before everything gets placed into its final
-destination. The final package database might use a specific, baked-in
-installation prefix (in the sense of @Setup configure --prefix pfx@). As a
-result, this package database won't be immediately usable, as we won't have
-copied over the build products yet.
-
-In order to be able to build packages in a temporary directory, we create a
-temporary package database that is used for the build, making use of it
-with @Setup register --inplace@.
-We also register the packages into the final package database using
-@ghc-pkg --force@: otherwise, @ghc-pkg@ would error because the relevant files
-haven't been copied over yet.
--}
-
--- | The package database directories.
---
--- See Note [Using two package databases].
-type PkgDbDirs :: PathUsability -> Type
-data family PkgDbDirs use
-
-data instance PkgDbDirs ForPrep
-  = PkgDbDirsForPrep
-    { tempPkgDbDir  :: !FilePath
-        -- ^ Local package database directory.
+data instance PkgDbDir ForPrep
+  = PkgDbDirForPrep
+    { finalPkgDbDir  :: !FilePath
+        -- ^ Installation package database directory.
     }
-data instance PkgDbDirs ForBuild
-  = PkgDbDirsForBuild
-    { tempPkgDbDir  :: !FilePath
-        -- ^ Local package database directory.
-    , tempPkgDbSem  :: !QSem
-        -- ^ Semaphore controlling access to the temporary
-        -- package database.
-    , finalPkgDbDir :: !FilePath
+data instance PkgDbDir ForBuild
+  = PkgDbDirForBuild
+    { finalPkgDbDir :: !FilePath
         -- ^ Installation package database directory.
     , finalPkgDbSem :: !QSem
         -- ^ Semaphore controlling access to the installation
         -- package database.
     }
 
--- | Compute the paths of the package database directories we are going
+-- | Compute the paths of the package database directory we are going
 -- to use.
---
--- See Note [Using two package databases].
-getPkgDbDirsForPrep :: Paths ForPrep -> PkgDbDirs ForPrep
-getPkgDbDirsForPrep ( Paths { fetchDir } ) =
-    PkgDbDirsForPrep { tempPkgDbDir = fetchDir </> "package.conf" }
+getPkgDbDirForPrep :: Paths ForPrep -> PkgDbDir ForPrep
+getPkgDbDirForPrep ( Paths { buildPaths = BuildPathsForPrep { installDir } } ) =
+    PkgDbDirForPrep { finalPkgDbDir = installDir </> "package.conf" }
 
--- | Compute the paths of the package database directories we are going
--- to use, and create some semaphores to control access to them
+-- | Compute the paths of the package database directory we are going
+-- to use, and create some semaphores to control access to it
 -- in order to avoid contention.
---
--- See Note [Using two package databases].
-getPkgDbDirsForBuild :: Paths ForBuild -> IO (PkgDbDirs ForBuild)
-getPkgDbDirsForBuild ( Paths { fetchDir, buildPaths = BuildPaths { installDir } } ) = do
-  tempPkgDbSem  <- newQSem 1
+getPkgDbDirForBuild :: Paths ForBuild -> IO (PkgDbDir ForBuild)
+getPkgDbDirForBuild ( Paths { buildPaths = BuildPaths { installDir } } ) = do
   finalPkgDbSem <- newQSem 1
   return $
-    PkgDbDirsForBuild { tempPkgDbDir, finalPkgDbDir, tempPkgDbSem, finalPkgDbSem }
+    PkgDbDirForBuild { finalPkgDbDir, finalPkgDbSem }
     where
-      tempPkgDbDir  = fetchDir   </> "package.conf"
       finalPkgDbDir = installDir </> "package.conf"
 
 -- | The package @name-version@ string and its directory.

@@ -1,0 +1,4 @@
+sources/
+install/
+logs/
+*.json
