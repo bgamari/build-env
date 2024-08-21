@@ -66,13 +66,14 @@ runOptionsParser currWorkDir = do
 -- | The command-line options parser for the 'build-env' executable.
 options :: FilePath -> Parser Opts
 options currWorkDir = do
-  mode      <- optMode
-  compiler  <- optCompiler
-  cabal     <- optCabal
-  workDir   <- optChangeWorkingDirectory currWorkDir
-  verbosity <- optVerbosity
-  delTemp   <- optTempDirPermanence
-  pure $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
+  mode       <- optMode
+  compiler   <- optCompiler
+  cabal      <- optCabal
+  workDir    <- optChangeWorkingDirectory currWorkDir
+  verbosity  <- optVerbosity
+  indexState <- optIndexState
+  delTemp    <- optTempDirPermanence
+  pure $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir, indexState }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
@@ -133,6 +134,14 @@ optTempDirPermanence =
       switch (  long "preserve-tmp"
              <> help "Preserve temporary build directories (useful for debugging)" )
 
+-- | Parse a Hackage index state.
+optIndexState :: Parser ( Maybe IndexState )
+optIndexState =
+  optional $ fmap ( IndexState . Text.pack ) $
+    option str ( long "index-state" <> help helpStr <> metavar "DATE" )
+  where
+    helpStr = "Use Hackage state as of DATE, e.g. 2022-12-25T00:00:00Z"
+
 -- | Parse the mode in which to run the application: plan, fetch, build.
 optMode :: Parser Mode
 optMode =
@@ -186,9 +195,8 @@ planInputs modeDesc = do
   planPins <- optional (freeze modeDesc)
   planUnits <- dependencies modeDesc
   planAllowNewer <- allowNewer
-  planIndexState <- indexState
 
-  pure $ PlanInputs { planPins, planUnits, planAllowNewer, planIndexState }
+  pure $ PlanInputs { planPins, planUnits, planAllowNewer }
 
 -- | Parse a list of pinned packages from a 'cabal.config' freeze file.
 freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
@@ -199,13 +207,6 @@ freeze modeDesc = FromFile <$> freezeFile
 
     helpStr :: String
     helpStr = modeDescription modeDesc <> " 'cabal.config' freeze file"
-
-indexState :: Parser ( Maybe IndexState )
-indexState =
-  optional $ fmap ( IndexState . Text.pack ) $
-    option str ( long "index-state" <> help helpStr <> metavar "DATE" )
-  where
-    helpStr = "use Hackage state as of DATE, e.g. 2022-12-25T00:00:00Z"
 
 -- | Parse @allow-newer@ options.
 allowNewer :: Parser AllowNewer

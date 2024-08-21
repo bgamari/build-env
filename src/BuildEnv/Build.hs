@@ -318,17 +318,18 @@ data CabalFilesContents
 -- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
 fetchPlan :: Verbosity
           -> Cabal
+          -> Maybe IndexState
           -> FilePath  -- ^ Directory in which to put the sources.
           -> CabalPlan
           -> IO ()
-fetchPlan verbosity cabal fetchDir cabalPlan =
+fetchPlan verbosity cabal mbIndexState fetchDir cabalPlan =
     for_ pkgs \ (pkgNm, pkgVer) -> do
       let nameVersion = pkgNameVersion pkgNm pkgVer
           nmVerStr = Text.unpack nameVersion
       pkgDirExists <- doesDirectoryExist (fetchDir </> nmVerStr)
       if   pkgDirExists
       then normalMsg verbosity $ "NOT fetching " <> nameVersion
-      else cabalFetch verbosity cabal fetchDir nmVerStr
+      else cabalFetch verbosity cabal mbIndexState fetchDir nmVerStr
   where
     pkgs :: Set (PkgName, Version)
     pkgs = Set.fromList
@@ -345,13 +346,15 @@ fetchPlan verbosity cabal fetchDir cabalPlan =
       _ -> Nothing
 
 -- | Call @cabal get@ to fetch a single package from Hackage.
-cabalFetch :: Verbosity -> Cabal -> FilePath -> String -> IO ()
-cabalFetch verbosity cabal root pkgNmVer = do
+cabalFetch :: Verbosity -> Cabal -> Maybe IndexState -> FilePath -> String -> IO ()
+cabalFetch verbosity cabal mbIndexState root pkgNmVer = do
     normalMsg verbosity $ "Fetching " <> Text.pack pkgNmVer
     let args = globalCabalArgs cabal ++
                  [ "get"
                  , pkgNmVer
                  , cabalVerbosity verbosity ]
+                 ++ [ "--index-state=" <> Text.unpack indexState
+                    | IndexState indexState <- maybeToList mbIndexState ]
     callProcessInIO Nothing $
       CP { cwd          = root
          , prog         = AbsPath $ cabalPath cabal

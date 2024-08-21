@@ -40,21 +40,25 @@ import BuildEnv.Parse
 main :: IO ()
 main = do
   currentDir <- getCurrentDirectory
-  Opts { compiler, cabal, mode, verbosity, delTemp, workDir }
+  Opts { compiler, cabal
+       , mode, verbosity, delTemp, workDir
+       , indexState = mbIndexState }
     <- runOptionsParser currentDir
   hSetBuffering stdout $ BlockBuffering Nothing
   withCurrentDirectory workDir $
     case mode of
       PlanMode { planModeInputs, planOutput } -> do
         CabalPlanBinary planBinary <-
-          computePlanFromInputs delTemp verbosity workDir compiler cabal planModeInputs
+          computePlanFromInputs
+            delTemp verbosity workDir compiler cabal
+            mbIndexState planModeInputs
         normalMsg verbosity $
           "Writing build plan to '" <> Text.pack planOutput <> "'"
         Lazy.ByteString.writeFile planOutput planBinary
       FetchMode ( FetchDescription { rawFetchDir, fetchInputPlan } ) newOrUpd -> do
-        plan <- getPlan delTemp verbosity workDir compiler cabal fetchInputPlan
+        plan <- getPlan delTemp verbosity workDir compiler cabal mbIndexState fetchInputPlan
         fetchDir <- canonicalizePath rawFetchDir
-        doFetch verbosity cabal fetchDir True newOrUpd plan
+        doFetch verbosity cabal mbIndexState fetchDir True newOrUpd plan
       BuildMode ( Build { buildBuildPlan
                         , buildStart
                         , buildStrategy
@@ -62,11 +66,11 @@ main = do
                         , mbOnlyDepsOf
                         , eventLogDir
                         , userUnitArgs } ) -> do
-        plan <- getPlan delTemp verbosity workDir compiler cabal buildBuildPlan
+        plan <- getPlan delTemp verbosity workDir compiler cabal mbIndexState buildBuildPlan
         ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
           <- canonicalizePaths compiler buildStrategy rawPaths
         case buildStart of
-          Fetch newOrUpd -> doFetch verbosity cabal fetchDir False newOrUpd plan
+          Fetch newOrUpd -> doFetch verbosity cabal mbIndexState fetchDir False newOrUpd plan
           _              -> return ()
         let mbOnlyDepsOfUnits :: Maybe [UnitId]
             mbOnlyDepsOfUnits =
@@ -90,9 +94,9 @@ main = do
 --    and allow-newer),
 --  - a @cabal.config@ freeze file,
 --  - explicit packages and allow-newer specified as command-line arguments.
-parsePlanInputs :: Verbosity -> FilePath -> PlanInputs -> IO CabalFilesContents
-parsePlanInputs verbosity workDir
-    (PlanInputs { planPins, planUnits, planAllowNewer, planIndexState })
+parsePlanInputs :: Verbosity -> FilePath -> Maybe IndexState -> PlanInputs -> IO CabalFilesContents
+parsePlanInputs verbosity workDir mbIndexState
+  ( PlanInputs { planPins, planUnits, planAllowNewer } )
   = do (pkgs, fileAllowNewer) <- parsePlanUnits verbosity planUnits
        let
          allAllowNewer = fileAllowNewer <> planAllowNewer
@@ -102,23 +106,23 @@ parsePlanInputs verbosity workDir
        projectContents <-
          case planPins of
            Nothing -> return $ cabalProjectContentsFromPackages workDir pkgs Map.empty
-             allAllowNewer planIndexState
+             allAllowNewer mbIndexState
            Just (FromFile pinCabalConfig) -> do
              normalMsg verbosity $
                "Reading 'cabal.config' file at '" <> Text.pack pinCabalConfig <> "'"
              pins <- parseCabalDotConfigPkgs pinCabalConfig
              return $ cabalProjectContentsFromPackages workDir pkgs pins
-               allAllowNewer planIndexState
+               allAllowNewer mbIndexState
            Just (Explicit pins) -> do
              return $ cabalProjectContentsFromPackages workDir pkgs pins
-               allAllowNewer planIndexState
+               allAllowNewer mbIndexState
        return $ CabalFilesContents { cabalContents, projectContents }
 
 -- | Retrieve the seed units we want to build, either from a seed file
 -- or from explicit command line arguments.
 parsePlanUnits :: Verbosity -> PackageData UnitSpecs -> IO (UnitSpecs, AllowNewer)
-parsePlanUnits _ (Explicit units) = return (units, AllowNewer Set.empty)
-parsePlanUnits verbosity (FromFile fp) =
+parsePlanUnits _ ( Explicit units )      = return (units, AllowNewer Set.empty)
+parsePlanUnits verbosity ( FromFile fp ) =
   do normalMsg verbosity $
        "Reading seed packages from '" <> Text.pack fp <> "'"
      parseSeedFile fp
@@ -130,22 +134,23 @@ computePlanFromInputs :: TempDirPermanence
                       -> FilePath
                       -> Compiler
                       -> Cabal
+                      -> Maybe IndexState
                       -> PlanInputs
                       -> IO CabalPlanBinary
-computePlanFromInputs delTemp verbosity workDir comp cabal inputs
-    = do cabalFileContents <- parsePlanInputs verbosity workDir inputs
-         normalMsg verbosity "Computing build plan"
-         computePlan delTemp verbosity comp cabal cabalFileContents
+computePlanFromInputs delTemp verbosity workDir comp cabal mbIndexState inputs
+  = do cabalFileContents <- parsePlanInputs verbosity workDir mbIndexState inputs
+       normalMsg verbosity "Computing build plan"
+       computePlan delTemp verbosity comp cabal cabalFileContents
 
 -- | Retrieve a cabal build plan, either by computing it or using
 -- a pre-existing @plan.json@ file.
-getPlan :: TempDirPermanence -> Verbosity -> FilePath -> Compiler -> Cabal -> Plan -> IO CabalPlan
-getPlan delTemp verbosity workDir comp cabal planMode = do
+getPlan :: TempDirPermanence -> Verbosity -> FilePath -> Compiler -> Cabal -> Maybe IndexState -> Plan -> IO CabalPlan
+getPlan delTemp verbosity workDir comp cabal mbIndexState planMode = do
    planBinary <-
      case planMode of
        ComputePlan planInputs mbPlanOutputPath -> do
         plan@(CabalPlanBinary planData) <-
-          computePlanFromInputs delTemp verbosity workDir comp cabal planInputs
+          computePlanFromInputs delTemp verbosity workDir comp cabal mbIndexState planInputs
         for_ mbPlanOutputPath \ planOutputPath ->
           Lazy.ByteString.writeFile planOutputPath planData
         return plan
@@ -159,13 +164,14 @@ getPlan delTemp verbosity workDir comp cabal planMode = do
 -- | Fetch all packages in a cabal build plan.
 doFetch :: Verbosity
         -> Cabal
+        -> Maybe IndexState
         -> FilePath
         -> Bool -- ^ True <=> we are fetching (not building)
                 -- (only relevant for error messages)
         -> NewOrExisting
         -> CabalPlan
         -> IO ()
-doFetch verbosity cabal fetchDir0 weAreFetching newOrUpd plan = do
+doFetch verbosity cabal mbIndexState fetchDir0 weAreFetching newOrUpd plan = do
   fetchDir       <- canonicalizePath fetchDir0
   fetchDirExists <- doesDirectoryExist fetchDir
   case newOrUpd of
@@ -181,7 +187,7 @@ doFetch verbosity cabal fetchDir0 weAreFetching newOrUpd plan = do
   createDirectoryIfMissing True fetchDir
   normalMsg verbosity $
     "Fetching sources from build plan into directory '" <> Text.pack fetchDir <> "'"
-  fetchPlan verbosity cabal fetchDir plan
+  fetchPlan verbosity cabal mbIndexState fetchDir plan
 
   where
     existsMsg

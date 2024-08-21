@@ -19,12 +19,13 @@ import BuildEnv.Config
 --------------------------------------------------------------------------------
 
 -- | The command-line options for the @build-env@ application.
-data Opts = Opts { compiler  :: Compiler
-                 , cabal     :: Cabal
-                 , mode      :: Mode
-                 , verbosity :: Verbosity
-                 , delTemp   :: TempDirPermanence
-                 , workDir   :: FilePath
+data Opts = Opts { compiler   :: Compiler
+                 , cabal      :: Cabal
+                 , mode       :: Mode
+                 , verbosity  :: Verbosity
+                 , delTemp    :: TempDirPermanence
+                 , workDir    :: FilePath
+                 , indexState :: Maybe IndexState
                  }
 
 -- | The mode in which to run the executable:
@@ -73,8 +74,6 @@ data PlanInputs
       -- ^ Additional package constraints.
     , planAllowNewer :: AllowNewer
       -- ^ Allow-newer specification.
-    , planIndexState :: Maybe IndexState
-      -- ^ index-state specification.
     }
   deriving stock Show
 
