@@ -473,7 +473,7 @@ build = do
     optHaddockArgs = do
       doHaddock <-
         switch (  long "haddock"
-               <> help "Generate haddock documentation" )
+               <> help "Generate Haddock documentation" )
       args <- many $
         option str (  long "haddock-arg"
                    <> help "Pass argument to 'Setup haddock'"
@@ -515,6 +515,6 @@ build = do
     optEventLogDir = do
         option (fmap Just str)
           (  long "eventlogs"
-          <> help "Directory for GHC eventlogs"
+          <> help "Directory for GHC event logs"
           <> value Nothing
           <> metavar "OUTDIR" )
