@@ -1,10 +1,13 @@
 name: CI
 
-# Trigger the workflow on push or pull request, but only for the main branch
+# Trigger the workflow on push or pull request, but only for the master branch
 on:
-  pull_request:
   push:
-    branches: [master]
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
 
 jobs:
   cabal:
@@ -84,6 +87,23 @@ jobs:
           cp -r install other
           $(find "other/bin" -type f -name "alex") test.x
         # Run Alex as a smoke-test to check that data directories are set correctly.
+
+      - name: "Test working directory (direct)"
+        working-directory: ./tests/WorkDirDirect
+        shell: bash
+        run: |
+          cabal run exe:build-env -- --cwd wd build hashable -f sources -o install
+          ghc-pkg --package-db=wd/install/package.conf field hashable id
+
+      - name: "Test working directory (script)"
+        if: runner.os != 'Windows'
+        working-directory: ./tests/WorkDirScript
+        shell: bash
+        run: |
+          cabal run exe:build-env -- --cwd wd build hashable -f sources -o install --script build_hash.sh -v2
+          chmod +x build_hash.sh
+          ./build_hash.sh
+          ghc-pkg --package-db=wd/install/package.conf field hashable id
 
       - name: "Refine a build"
         working-directory: ./tests/Refine

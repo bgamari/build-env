@@ -15,18 +15,26 @@ import Data.Set
 -- build-env
 import BuildEnv.CabalPlan
 import BuildEnv.Config
+import BuildEnv.Path
 
 --------------------------------------------------------------------------------
 
 -- | The command-line options for the @build-env@ application.
-data Opts = Opts { compiler   :: Compiler
-                 , cabal      :: Cabal
-                 , mode       :: Mode
-                 , verbosity  :: Verbosity
-                 , delTemp    :: TempDirPermanence
-                 , workDir    :: FilePath
-                 , indexState :: Maybe IndexState
-                 }
+data GlobalOpts =
+  GlobalOpts
+    { compiler   :: !Compiler
+      -- ^ The compiler to use to build packages
+    , cabal      :: !Cabal
+      -- ^ The @cabal-install@ executable to use for computing and fetching build plans
+    , verbosity  :: !Verbosity
+      -- ^ Verbosity
+    , delTemp    :: !TempDirPermanence
+      -- ^ Whether to preserve temporary directories (for debugging purposes)
+    , workDir    :: !( SymbolicPath CWD ( Dir Project ) )
+      -- ^ Working directory
+    , indexState :: !( Maybe IndexState )
+      -- ^ Hackage index state (optional)
+    }
 
 -- | The mode in which to run the executable:
 --
@@ -36,22 +44,22 @@ data Opts = Opts { compiler   :: Compiler
 data Mode
   -- | Find a build plan.
   = PlanMode
-     { planModeInputs :: PlanInputs
-     , planOutput     :: FilePath
+     { planModeInputs :: !PlanInputs
+     , planOutput     :: !( SymbolicPath Project File )
        -- ^ Where to output the @plan.json@ file.
      }
   -- | Fetch sources from a build plan.
   | FetchMode
-      FetchDescription -- ^ what to fetch
-      NewOrExisting    -- ^ whether to create a new directory
+      !FetchDescription -- ^ what to fetch
+      !NewOrExisting    -- ^ whether to create a new directory
                        -- or add to an existing one
   -- | Build and register packages from fetched sources.
-  | BuildMode Build
+  | BuildMode !Build
 
 -- | How to specify which packages/units to constraint/build.
 data PackageData pkgs
   -- | Explicit description of packages/units.
-  = Explicit pkgs
+  = Explicit !pkgs
   -- | Parse package information from the given file.
   --
   -- The file contents will be interpreted as follows:
@@ -62,17 +70,17 @@ data PackageData pkgs
   --   - seed units: this is a list of seed units to build,
   --     with inline flags and constraints, and allow-newer stanzas.
   --     See 'parseSeedFile'.
-  | FromFile FilePath
+  | FromFile !( SymbolicPath Project File )
   deriving stock Show
 
 -- | Inputs for the computation of a cabal plan.
 data PlanInputs
   = PlanInputs
-    { planUnits      :: PackageData UnitSpecs
+    { planUnits      :: !( PackageData UnitSpecs )
       -- ^ Seed dependencies for the build plan.
-    , planPins       :: Maybe (PackageData PkgSpecs)
+    , planPins       :: !( Maybe ( PackageData PkgSpecs ) )
       -- ^ Additional package constraints.
-    , planAllowNewer :: AllowNewer
+    , planAllowNewer :: !AllowNewer
       -- ^ Allow-newer specification.
     }
   deriving stock Show
@@ -81,9 +89,9 @@ data PlanInputs
 -- and what build plan they correspond to.
 data FetchDescription
   = FetchDescription
-    { rawFetchDir    :: FilePath
+    { fetchDir       :: !( SymbolicPath Project ( Dir Fetch ) )
       -- ^ Directory for fetched sources.
-    , fetchInputPlan :: Plan
+    , fetchInputPlan :: !Plan
       -- ^ The build plan corresponding to the fetched sources.
     }
   deriving stock Show
@@ -93,20 +101,20 @@ data FetchDescription
 data Plan
   -- | Compute a plan.
   = ComputePlan
-      PlanInputs
+      !PlanInputs
         -- ^ Input needed to compute the plan.
-      (Maybe FilePath)
+      !( Maybe ( SymbolicPath Project File ) )
         -- ^ Optional filepath at which to write out the computed plan.
 
   -- | Use an existing @plan.json@ by reading the given file.
   | UsePlan
-    { planJSONPath :: FilePath }
+    { planJSONPath :: !( SymbolicPath Project File ) }
   deriving stock Show
 
 -- | At which point to start/continue a build.
 data BuildStart
   -- | Fetch sources and start a new build.
-  = Fetch NewOrExisting
+  = Fetch !NewOrExisting
   -- | Start a new build from prefetched sources.
   | Prefetched
   -- | Resume a previous build.
@@ -124,21 +132,21 @@ data NewOrExisting
 -- | Information needed to perform a build.
 data Build
   = Build
-    { buildRawPaths   :: Paths Raw
+    { buildRawPaths   :: !( Paths Raw )
       -- ^ The directories relevant for the build:
       --
       --  - fetched sources directory,
       --  - build output directory structure
-    , buildStart      :: BuildStart
+    , buildStart      :: !BuildStart
       -- ^ At which stage should the build start?
-    , buildBuildPlan  :: Plan
+    , buildBuildPlan  :: !Plan
       -- ^ The build plan to follow.
-    , buildStrategy   :: BuildStrategy
+    , buildStrategy   :: !BuildStrategy
       -- ^ How to perform the build (see 'BuildStrategy').
-    , mbOnlyDepsOf    :: Maybe ( Set PkgName )
+    , mbOnlyDepsOf    :: !( Maybe ( Set PkgName ) )
       -- ^ @Just pkgs@ <=> only build @pkgs@ (and their dependencies).
       --   @Nothing@ <=> build all units in the build plan.
-    , eventLogDir     :: Maybe FilePath
+    , eventLogDir     :: !( Maybe ( SymbolicPath Project ( Dir Logs ) ) )
       -- ^ Optional output directory in which to output GHC eventlogs
       -- for the build.
     , userUnitArgs    :: ConfiguredUnit -> UnitArgs

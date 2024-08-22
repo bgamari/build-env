@@ -60,13 +60,9 @@ import Data.Word
 import System.IO
   ( hFlush, stdout )
 
--- directory
-import System.Directory
-  ( canonicalizePath )
-
 -- filepath
 import System.FilePath
-  ( (</>), dropDrive )
+  ( dropDrive )
 
 -- text
 import Data.Text
@@ -82,6 +78,9 @@ import Data.Time.Clock
 import Data.Time.Format
   ( defaultTimeLocale, formatTime )
 
+-- build-env
+import BuildEnv.Path
+
 --------------------------------------------------------------------------------
 -- Build strategy
 
@@ -91,7 +90,7 @@ data BuildStrategy
   = Execute RunStrategy
   -- | Output a build script that can be run later.
   | Script
-    { scriptPath   :: !FilePath
+    { scriptPath   :: !( SymbolicPath CWD File )
       -- ^ Output path at which to write the build script.
     , useVariables :: !Bool
       -- ^ Should the output shell script use variables, or baked in paths?
@@ -160,7 +159,7 @@ data UnitArgs =
 -- GHC & cabal-install
 
 -- | Path to the @cabal-install@ executable.
-data Cabal = Cabal { cabalPath       :: !FilePath
+data Cabal = Cabal { cabalPath       :: !( AbsolutePath File )
                    , globalCabalArgs :: !Args
                      -- ^ Arguments to pass to all @cabal@ invocations,
                      -- before any @cabal@ command.
@@ -169,8 +168,8 @@ data Cabal = Cabal { cabalPath       :: !FilePath
 
 -- | Paths to the @ghc@ and @ghc-pkg@ executables.
 data Compiler =
-  Compiler { ghcPath    :: !FilePath
-           , ghcPkgPath :: !FilePath
+  Compiler { ghcPath    :: !( AbsolutePath File )
+           , ghcPkgPath :: !( AbsolutePath File )
            }
   deriving stock Show
 
@@ -189,7 +188,7 @@ newtype IndexState = IndexState Text
 type Paths :: PathUsability -> Type
 data Paths use
   = Paths
-    { fetchDir   :: !FilePath
+    { fetchDir   :: !( SymbolicPath Project ( Dir Fetch ) )
        -- ^ Input fetched sources directory.
     , buildPaths :: BuildPaths use
       -- ^ Output build directory structure.
@@ -205,9 +204,9 @@ type BuildPaths :: PathUsability -> Type
 data family BuildPaths use
 data instance BuildPaths Raw
   = RawBuildPaths
-    { rawDestDir :: !FilePath
+    { rawDestDir :: !( SymbolicPath Project ( Dir Install ) )
       -- ^ Raw output build @destdir@ (might be relative).
-    , rawPrefix  :: !FilePath
+    , rawPrefix  :: !( SymbolicPath Project ( Dir Prefix ) )
       -- ^ Raw output build @prefix@ (might be relative).
     }
   deriving stock Show
@@ -215,7 +214,7 @@ data instance BuildPaths ForPrep
   = BuildPathsForPrep
     { compilerForPrep :: !Compiler
       -- ^ Which @ghc@ and @ghc-pkg@ to use.
-    , installDir      :: !FilePath
+    , installDir      :: !( AbsolutePath ( Dir Install ) )
       -- ^ Output installation directory @destdir/prefix@ (absolute).
     }
   deriving stock Show
@@ -223,11 +222,11 @@ data instance BuildPaths ForBuild
   = BuildPaths
     { compiler   :: !Compiler
       -- ^ Which @ghc@ and @ghc-pkg@ to use.
-    , prefix     :: !FilePath
+    , prefix     :: !( AbsolutePath ( Dir Prefix ) )
       -- ^ Output build @prefix@ (absolute).
-    , installDir :: !FilePath
+    , installDir :: !( AbsolutePath ( Dir Install ) )
       -- ^ Output installation directory @destdir/prefix@ (absolute).
-    , logDir     :: !FilePath
+    , logDir     :: !( AbsolutePath ( Dir Logs ) )
       -- ^ Directory in which to put logs.
     }
   deriving stock Show
@@ -249,43 +248,38 @@ data PathUsability
 -- for preparing and executing a build, respectively.
 canonicalizePaths :: Compiler
                   -> BuildStrategy
+                  -> SymbolicPath CWD ( Dir Project)
                   -> Paths Raw
                   -> IO ( Paths ForPrep, Paths ForBuild )
-canonicalizePaths compiler buildStrat
+canonicalizePaths compiler buildStrat workDir
   ( Paths
-    { fetchDir   = fetchDir0
+    { fetchDir   = fetchDir
     , buildPaths = RawBuildPaths { rawPrefix, rawDestDir } } )
   = do
-      fetchDir   <- canonicalizePath fetchDir0
-      prefix     <- canonicalizePath rawPrefix
-      installDir <- canonicalizePath ( rawDestDir </> dropDrive prefix )
-        -- We must use dropDrive here. Quoting from the documentation of (</>):
-        --
-        --   If the second path starts with a path separator or a drive letter,
-        --   then (</>) returns the second path.
-        --
-        -- We don't want that, as we *do* want to concatenate both paths.
+      prefix     <- makeAbsolute workDir rawPrefix
+      installDir <- makeAbsolute workDir ( mkInstallDir rawDestDir prefix )
+
 
       logDir <- case buildStrat of
-        Script  {} -> return "${LOGDIR}" -- LOGDIR is defined by the script.
+        Script  {} -> return $ mkAbsolutePath "${LOGDIR}" -- LOGDIR is defined by the script.
         Execute {} -> do
           -- Pick the logging directory based on the current time.
           time <- getCurrentTime
-          let logDir = "logs" </> formatTime defaultTimeLocale "%0Y-%m-%d_%H-%M-%S" time
-          canonicalizePath logDir
+          makeAbsolute workDir
+            ( mkSymbolicPath $ "logs" </> formatTime defaultTimeLocale "%0Y-%m-%d_%H-%M-%S" time )
 
       let forBuild = case buildStrat of
             Script { useVariables }
               | useVariables
-              -> Paths { fetchDir   = "${SOURCES}"
+              -> Paths { fetchDir   = mkSymbolicPath "${SOURCES}"
                        , buildPaths =
                          BuildPaths
-                           { prefix     = "${PREFIX}"
-                           , installDir = "${DESTDIR}" </> "${PREFIX}"
+                           { prefix     = mkAbsolutePath "${PREFIX}"
+                           , installDir = mkAbsolutePath $ "${DESTDIR}" </> "${PREFIX}"
                            , logDir
                            , compiler =
-                             Compiler { ghcPath    = "${GHC}"
-                                      , ghcPkgPath = "${GHCPKG}" } } }
+                             Compiler { ghcPath    = mkAbsolutePath "${GHC}"
+                                      , ghcPkgPath = mkAbsolutePath "${GHCPKG}" } } }
             _don'tUseVars ->
               Paths { fetchDir
                     , buildPaths =
@@ -295,6 +289,18 @@ canonicalizePaths compiler buildStrat
                 , buildPaths =
                   BuildPathsForPrep { compilerForPrep = compiler, installDir } }
         , forBuild )
+
+mkInstallDir :: SymbolicPath Project ( Dir Install )
+             -> AbsolutePath ( Dir Prefix )
+             -> SymbolicPath Project ( Dir Install )
+mkInstallDir destDir prefix =
+  destDir </> mkRelativePath ( dropDrive $ getAbsolutePath prefix )
+    -- We must use dropDrive here. Quoting from the documentation of (</>):
+    --
+    --   If the second path starts with a path separator or a drive letter,
+    --   then (</>) returns the second path.
+    --
+    -- We don't want that, as we *do* want to concatenate both paths.
 
 -- | How to handle deletion of temporary directories.
 data TempDirPermanence

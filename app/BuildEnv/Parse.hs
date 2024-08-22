@@ -30,6 +30,8 @@ import qualified Data.Set as Set
 
 -- optparse-applicative
 import Options.Applicative
+import Options.Applicative.Help.Pretty
+  ( (.$.) )
 
 -- text
 import Data.Text
@@ -41,19 +43,20 @@ import qualified Data.Text as Text
 import BuildEnv.CabalPlan
 import BuildEnv.Config
 import BuildEnv.Options
+import BuildEnv.Path
 import BuildEnv.Utils
   ( splitOn )
 
 --------------------------------------------------------------------------------
 
 -- | Run the command-line options parser.
-runOptionsParser :: FilePath -> IO Opts
-runOptionsParser currWorkDir = do
+runOptionsParser :: IO ( GlobalOpts, Mode )
+runOptionsParser = do
   args <- getArgs
   handleParseResult $ execParserPure pPrefs pInfo args
   where
     pInfo =
-      info ( helper <*> options currWorkDir )
+      info ( helper <*> options )
         (  fullDesc
         <> header "build-env - compute, fetch and build Cabal build plans" )
     pPrefs = prefs $
@@ -64,30 +67,41 @@ runOptionsParser currWorkDir = do
               , columns 90 ]
 
 -- | The command-line options parser for the 'build-env' executable.
-options :: FilePath -> Parser Opts
-options currWorkDir = do
+options :: Parser ( GlobalOpts, Mode )
+options = do
   mode       <- optMode
+  globalOpts <- optGlobalOpts
+  pure ( globalOpts, mode )
+
+-- | Parse global options for 'build-env'.
+optGlobalOpts :: Parser GlobalOpts
+optGlobalOpts = do
   compiler   <- optCompiler
   cabal      <- optCabal
-  workDir    <- optChangeWorkingDirectory currWorkDir
+  workDir    <- optChangeWorkingDirectory
   verbosity  <- optVerbosity
   indexState <- optIndexState
   delTemp    <- optTempDirPermanence
-  pure $ Opts { compiler, cabal, mode, verbosity, delTemp, workDir, indexState }
+  pure $
+    GlobalOpts
+      { compiler, cabal
+      , verbosity, delTemp
+      , workDir, indexState
+      }
 
 -- | Parse @ghc@ and @ghc-pkg@ paths.
 optCompiler :: Parser Compiler
 optCompiler =
     Compiler
-      <$> option str
+      <$> option ( fmap mkAbsolutePath str )
             (  long "ghc"
-            <> value "ghc"
+            <> value ( mkAbsolutePath "ghc" )
             <> help "'ghc' executable path"
             <> metavar "GHC"
             )
-      <*> option str
+      <*> option ( fmap mkAbsolutePath str )
             (  long "ghc-pkg"
-            <> value "ghc-pkg"
+            <> value ( mkAbsolutePath "ghc-pkg" )
             <> help "'ghc-pkg' executable path"
             <> metavar "GHC-PKG"
             )
@@ -96,9 +110,9 @@ optCompiler =
 optCabal :: Parser Cabal
 optCabal = do
   cabalPath <-
-    option str
+    option ( fmap mkAbsolutePath str )
       (  long "cabal"
-      <> value "cabal"
+      <> value ( mkAbsolutePath "cabal" )
       <> help "'cabal' executable path"
       <> metavar "CABAL" )
   globalCabalArgs <-
@@ -108,11 +122,11 @@ optCabal = do
   pure $ Cabal { cabalPath, globalCabalArgs }
 
 -- | Parse a @cwd@ (change working directory) option.
-optChangeWorkingDirectory :: FilePath -> Parser FilePath
-optChangeWorkingDirectory currWorkDir =
-    option str
+optChangeWorkingDirectory :: Parser ( SymbolicPath CWD ( Dir Project ) )
+optChangeWorkingDirectory =
+    option ( fmap mkSymbolicPath str )
       (  long "cwd"
-      <> value currWorkDir
+      <> value sameDirectory
       <> help "Set working directory"
       <> metavar "DIR" )
 
@@ -157,13 +171,14 @@ optMode =
         ( fullDesc <> buildInfo )
     ]
   where
-    optOutput :: Parser FilePath
+    optOutput :: Parser ( SymbolicPath Project File )
     optOutput =
-      option str (  short 'p'
-                 <> long "plan"
-                 <> help "Output 'plan.json' file"
-                 <> metavar "OUTFILE"
-                 )
+      option ( fmap mkSymbolicPath str )
+        (  short 'p'
+        <> long "plan"
+        <> help "Output 'plan.json' file"
+        <> metavar "OUTFILE"
+        )
     planInfo, fetchInfo, buildInfo :: InfoMod a
     planInfo  = progDesc "Compute a build plan from a collection of seeds"
     fetchInfo = progDesc "Fetch package sources"
@@ -202,8 +217,9 @@ planInputs modeDesc = do
 freeze :: ModeDescription -> Parser ( PackageData PkgSpecs )
 freeze modeDesc = FromFile <$> freezeFile
   where
-    freezeFile :: Parser FilePath
-    freezeFile = option str ( long "freeze" <> help helpStr <> metavar "INFILE" )
+    freezeFile :: Parser ( SymbolicPath Project File )
+    freezeFile = option ( fmap mkSymbolicPath str )
+                   ( long "freeze" <> help helpStr <> metavar "INFILE" )
 
     helpStr :: String
     helpStr = modeDescription modeDesc <> " 'cabal.config' freeze file"
@@ -249,8 +265,9 @@ dependencies modeDesc
 
   where
 
-    seeds :: Parser FilePath
-    seeds = option str ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
+    seeds :: Parser ( SymbolicPath Project File )
+    seeds = option ( fmap mkSymbolicPath str )
+              ( long "seeds" <> help seedsHelp <> metavar "INFILE" )
 
     explicitUnits :: Parser ( PackageData UnitSpecs )
     explicitUnits = do
@@ -263,20 +280,20 @@ dependencies modeDesc
              [ (pkg, (Local loc, emptyPkgSpec, mempty))
              | (pkg, loc) <- locals ]
 
-    localPkg :: Parser (PkgName, FilePath)
+    localPkg :: Parser ( PkgName, SymbolicPath Project ( Dir Pkg ) )
     localPkg =
       option readLocalPkg
         (  long "local"
         <> help "Local package source location"
         <> metavar "PKG=PATH" )
 
-    readLocalPkg :: ReadM (PkgName, FilePath)
+    readLocalPkg :: ReadM ( PkgName, SymbolicPath Project ( Dir Pkg ) )
     readLocalPkg = do
       ln <- str
       case Text.splitOn "=" ln of
         pkg:loc:_
           | validPackageName pkg
-          -> return (PkgName pkg, Text.unpack loc)
+          -> return ( PkgName pkg, mkSymbolicPath $ Text.unpack loc )
         _ -> readerError $
               "Could not parse --local argument\n" ++
               "Valid usage is of the form: --local PKG=PATH"
@@ -303,17 +320,17 @@ plan modeDesc = ( UsePlan <$> optPlanPath )
             <|> ( ComputePlan <$> planInputs modeDesc <*> optPlanOutput )
 
   where
-    optPlanPath :: Parser FilePath
+    optPlanPath :: Parser ( SymbolicPath Project File )
     optPlanPath =
-      option str
+      option ( fmap mkSymbolicPath str )
         (  short 'p'
         <> long "plan"
         <> help "Input 'plan.json' file"
         <> metavar "INFILE" )
 
-    optPlanOutput :: Parser (Maybe FilePath)
+    optPlanOutput :: Parser ( Maybe ( SymbolicPath Project File ) )
     optPlanOutput =
-      option (fmap Just str)
+      option ( fmap ( Just . mkSymbolicPath ) str )
         (  long "output-plan"
         <> value Nothing
         <> help "Output 'plan.json' file"
@@ -324,13 +341,13 @@ plan modeDesc = ( UsePlan <$> optPlanPath )
 fetchDescription :: Parser FetchDescription
 fetchDescription = do
   fetchInputPlan <- plan Fetching
-  rawFetchDir    <- optFetchDir Fetching
-  pure $ FetchDescription { rawFetchDir, fetchInputPlan }
+  fetchDir       <- optFetchDir Fetching
+  pure $ FetchDescription { fetchDir, fetchInputPlan }
 
 -- | Parse the fetch directory.
-optFetchDir :: ModeDescription -> Parser FilePath
+optFetchDir :: ModeDescription -> Parser ( SymbolicPath Project ( Dir Fetch ) )
 optFetchDir modeDesc =
-  option str
+  option ( fmap mkSymbolicPath str )
     (  short 'f'
     <> long "fetchdir"
     <> help "Directory for fetched sources"
@@ -407,11 +424,12 @@ build = do
           <> help "Use variables in the shell script output ($PREFIX etc)" )
       pure $ Script { scriptPath, useVariables }
 
-    optScriptPath :: Parser FilePath
+    optScriptPath :: Parser ( SymbolicPath CWD File )
     optScriptPath =
-      option str
+      option ( fmap mkSymbolicPath str )
         (  long "script"
-        <> help "Output a shell script containing build steps"
+        <> helpDoc ( Just $  "Output a shell script containing build steps"
+                         .$. "  NB: path is interpreted relative to current work dir, NOT --cwd" )
         <> metavar "OUTFILE" )
 
     optStart :: Parser BuildStart
@@ -430,7 +448,7 @@ build = do
         (  long "prefetched"
         <> help "Start the build from the prefetched sources" )
 
-    optRawPaths :: Parser (Paths Raw)
+    optRawPaths :: Parser ( Paths Raw )
     optRawPaths = do
       fetchDir   <- optFetchDir Building
       buildPaths <- optBuildPaths
@@ -439,15 +457,17 @@ build = do
     optBuildPaths :: Parser (BuildPaths Raw)
     optBuildPaths = do
       rawPrefix <-
-        option str (  short 'o'
-                   <> long "prefix"
-                   <> help "Installation prefix"
-                   <> metavar "OUTDIR" )
+        option ( fmap mkSymbolicPath str )
+          (  short 'o'
+          <> long "prefix"
+          <> help "Installation prefix"
+          <> metavar "OUTDIR" )
       rawDestDir <-
-        option str (  long "destdir"
-                   <> help "Installation destination directory"
-                   <> value "/"
-                   <> metavar "OUTDIR" )
+        option ( fmap mkSymbolicPath str )
+          (  long "destdir"
+          <> help "Installation destination directory"
+          <> value ( mkSymbolicPath "/" )
+          <> metavar "OUTDIR" )
       pure $ RawBuildPaths { rawPrefix, rawDestDir }
 
     -- TODO: we only support passing arguments for all units at once,
@@ -511,9 +531,9 @@ build = do
       else readerError $
             "Invalid package name: " <> Text.unpack nm
 
-    optEventLogDir :: Parser ( Maybe FilePath )
+    optEventLogDir :: Parser ( Maybe ( SymbolicPath Project ( Dir Logs ) ) )
     optEventLogDir = do
-        option (fmap Just str)
+        option ( fmap ( Just . mkSymbolicPath ) str )
           (  long "eventlogs"
           <> help "Directory for GHC event logs"
           <> value Nothing

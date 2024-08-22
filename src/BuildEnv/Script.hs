@@ -1,4 +1,6 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -61,10 +63,6 @@ import qualified System.IO as System
 import System.Directory
   ( createDirectoryIfMissing )
 
--- filepath
-import System.FilePath
-  ( (<.>) )
-
 -- text
 import Data.Text
   ( Text )
@@ -81,6 +79,7 @@ import BuildEnv.Config
   ( Verbosity(..), Counter(..), Style(..)
   , hostStyle
   )
+import BuildEnv.Path
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO )
 
@@ -123,9 +122,9 @@ type BuildSteps = [BuildStep]
 -- | A build step.
 data BuildStep
   -- | Call a processs with the given arguments.
-  = CallProcess CallProcess
+  = forall dir. CallProcess ( CallProcess dir )
   -- | Create the given directory.
-  | CreateDir   FilePath
+  | forall dir. CreateDir ( AbsolutePath ( Dir dir ) )
   -- | Log a message to @stdout@.
   | LogMessage  String
   -- | Report one unit of progress.
@@ -139,11 +138,11 @@ step :: BuildStep -> BuildScript
 step s = BuildScript $ ReaderT \ _ -> tell [s]
 
 -- | Call a process with given arguments.
-callProcess :: CallProcess -> BuildScript
+callProcess :: CallProcess dir -> BuildScript
 callProcess = step . CallProcess
 
 -- | Create the given directory.
-createDir :: FilePath -> BuildScript
+createDir :: AbsolutePath ( Dir dir ) -> BuildScript
 createDir = step . CreateDir
 
 -- | Log a message.
@@ -188,22 +187,29 @@ data ScriptConfig
     --
     --  - add quotes around command-line arguments?
     --  - add @./@ to run an executable in the current working directory?
+
+  , scriptWorkingDir :: !( SymbolicPath CWD ( Dir Project ) )
+    -- ^ Working directory for the script.
+
   , scriptStyle :: !Style
     -- ^ Whether to use Posix or Windows style conventions. See 'Style'.
 
-  , scriptTotal :: !(Maybe Word)
+  , scriptTotal :: !( Maybe Word )
     -- ^ Optional: the total number of units we are building;
     -- used to report progress.
   }
 
 -- | Configure a script to run on the host (in @IO@).
-hostRunCfg :: Maybe Word -- ^ Optional: total to report progress against.
+hostRunCfg :: SymbolicPath CWD ( Dir Project )
+           -> Maybe Word -- ^ Optional: total to report progress against.
            -> ScriptConfig
-hostRunCfg mbTotal =
+hostRunCfg workDir mbTotal =
   ScriptConfig
-    { scriptOutput = Run
-    , scriptStyle  = hostStyle
-    , scriptTotal  = mbTotal }
+    { scriptOutput     = Run
+    , scriptStyle      = hostStyle
+    , scriptTotal      = mbTotal
+    , scriptWorkingDir = workDir
+    }
 
 -- | Whether to expand or escape variables in a shell script.
 data EscapeVars
@@ -255,12 +261,13 @@ quoteArg escapeVars ( ScriptConfig { scriptOutput } ) =
 -- IO
 
 -- | Execute a 'BuildScript' in the 'IO' monad.
-executeBuildScript :: Maybe Counter -- ^ Optional counter to use to report progress.
+executeBuildScript :: SymbolicPath CWD ( Dir Project ) -- ^ Working directory.
+                   -> Maybe Counter -- ^ Optional counter to use to report progress.
                    -> BuildScript   -- ^ The build script to execute.
                    -> IO ()
-executeBuildScript counter
+executeBuildScript workDir counter
   = traverse_  ( executeBuildStep counter )
-  . buildSteps ( hostRunCfg $ fmap counterMax counter )
+  . buildSteps ( hostRunCfg workDir $ fmap counterMax counter )
 
 -- | Execute a single 'BuildStep' in the 'IO' monad.
 executeBuildStep :: Maybe Counter
@@ -269,7 +276,7 @@ executeBuildStep :: Maybe Counter
                  -> IO ()
 executeBuildStep mbCounter = \case
   CallProcess cp  -> callProcessInIO mbCounter cp
-  CreateDir   dir -> createDirectoryIfMissing True dir
+  CreateDir   dir -> createDirectoryIfMissing True ( getAbsolutePath dir )
   LogMessage  msg -> do { putStrLn msg ; hFlush System.stdout }
   ReportProgress { outputProgress } ->
     for_ mbCounter \ counter -> do
@@ -316,7 +323,7 @@ script scriptCfg buildScript =
 stepScript :: ScriptConfig -> BuildStep -> [ Text ]
 stepScript scriptCfg = \case
   CreateDir dir ->
-    [ "mkdir -p " <> q ExpandVars dir ]
+    [ "mkdir -p " <> q ExpandVars ( getAbsolutePath dir ) ]
   LogMessage str ->
     [ "echo " <> q ExpandVars str ]
   ReportProgress { outputProgress } ->
@@ -341,7 +348,7 @@ stepScript scriptCfg = \case
     -- NB: we ignore the semaphore, as the build scripts we produce
     -- are inherently sequential.
     logCommand ++
-    [ "( cd " <> q ExpandVars cwd <> " ; \\" ]
+    [ "( cd " <> q ExpandVars ( getSymbolicPath cwd ) <> " ; \\" ]
     ++ mbUpdatePath
     ++ map mkEnvVar extraEnvVars
     ++
@@ -353,7 +360,7 @@ stepScript scriptCfg = \case
     , "  echo -e " <>
         "\"callProcess failed with non-zero exit code. Command:\\n" <>
         "  > " <> unquote cmd <> "\\n" <>
-        "  CWD = " <> unquote (q ExpandVars cwd) <> "\""
+        "  CWD = " <> unquote ( q ExpandVars ( getSymbolicPath cwd ) ) <> "\""
       <> logErr
     ]
     ++ progressReport
@@ -362,9 +369,13 @@ stepScript scriptCfg = \case
     [ "  exit \"${" <> resVar <> "}\""
     , "fi" ]
     where
+      progPath :: FilePath
+      progPath = case prog of
+        AbsPath p -> getAbsolutePath p
+        RelPath p -> getSymbolicPath p
       cmd :: Text
-      cmd = q ExpandVars ( progPath prog ) <> " " <> Text.unwords (map Text.pack args)
-        --         (1)                                         (2)
+      cmd = q ExpandVars progPath <> " " <> Text.unwords (map Text.pack args)
+        --                 (1)                                  (2)
         --
         -- (1)
         --   In shell scripts, we always change directory before running the
@@ -389,7 +400,7 @@ stepScript scriptCfg = \case
         = []
         | otherwise
         = [  "  export PATH=$PATH:"
-          <> Text.intercalate ":" (map Text.pack extraPATH) -- (already quoted)
+          <> Text.intercalate ":" ( map Text.pack extraPATH ) -- (already quoted)
           <> " ; \\" ]
 
       mkEnvVar :: (String, String) -> Text
@@ -405,14 +416,14 @@ stepScript scriptCfg = \case
           Nothing      -> ( [], "", " >&2", [] )
           Just logPath ->
             let stdoutFile, stderrFile :: Text
-                stdoutFile = q ExpandVars ( logPath <.> "stdout" )
-                stderrFile = q ExpandVars ( logPath <.> "stderr" )
+                stdoutFile = q ExpandVars ( getAbsolutePath logPath <.> "stdout" )
+                stderrFile = q ExpandVars ( getAbsolutePath logPath <.> "stderr" )
             in ( [ "echo \"> " <> unquote cmd <> "\" >> " <> stdoutFile ]
                , " 2>&1 >" <> stdoutFile <> " | tee -a " <> stderrFile
                   -- Write stdout to the stdout log file.
                   -- Write stderr both to the terminal and to the stderr log file.
                , " | tee -a " <> stderrFile <> " >&2"
-               , [ "  echo \"Logs are available at: " <> unquote ( q ExpandVars ( logPath <> ".{stdout,stderr}" ) ) <> "\"" ] )
+               , [ "  echo \"Logs are available at: " <> unquote ( q ExpandVars ( getAbsolutePath logPath <> ".{stdout,stderr}" ) ) <> "\"" ] )
 
       progressReport :: [Text]
       progressReport =
