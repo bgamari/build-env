@@ -363,9 +363,9 @@ buildUnit verbosity
           let pkgRegsFile = thisUnit'sId <> "-pkg-reg.conf"
 
           logMessage verbosity Verbose $
-           mconcat [ "Registering ", unitPrintableName
-                   , " in package database at:\n  "
-                   , show finalPkgDbDir ]
+           mconcat [ "Writing package registration for ", unitPrintableName
+                   , " to:\n"
+                   , pkgRegsFile ]
 
           -- Setup register
           callProcess @Pkg $
@@ -383,6 +383,11 @@ buildUnit verbosity
           -- NB: we have configured & built a single target,
           -- so there should be a single "pkg-reg.conf" file,
           -- and not a directory of registration files.
+
+          logMessage verbosity Verbose $
+           mconcat [ "Registering ", unitPrintableName
+                   , " in package database at:\n"
+                   , show finalPkgDbDir ]
 
           -- ghc-pkg register
           callProcess @Pkg $

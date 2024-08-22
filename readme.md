@@ -12,6 +12,7 @@ in hermetic build environments.
 
 - [Example](#example)
 - [Commands](#commands)
+  - [Parallelism](#parallelism)
 - [What does `build-env` do?](#what-does-build-env-do)
 - [Hermetic builds](#hermetic-builds)
   - [Narrowing a build down (for debugging)](#narrowing-a-build-down-for-debugging)
@@ -65,11 +66,26 @@ $ build-env build -p lens-plan.json -f sources -o install -j8 --prefetched
 Being able to separate these steps affords us some extra flexibility, as
 subsequent sections will explain.
 
-Note: it is preferable to pass a previously computed build plan when calling
+__Note__: it is preferable to pass a previously computed build plan when calling
 `build-env build --prefetched`: an invocation of the form `build-env build a b c --prefetched`
 will compute a new build plan, and this build plan could be different from
 the plan that was previously fetched, for example if you have run `cabal update`
-in the meantime.
+in the meantime.  
+Another option is to pass `--index-state`, which pins down a specific Hackage
+index state.
+
+### Parallelism
+
+`build-env` supports parallel builds in much the same way as `cabal-install` does:
+
+  - `-jN` controls how many packages are built concurrently.
+  - `--configure-arg --ghc-option=-jN` controls the parallelism afforded to
+    GHC invocations when building individual packages.
+  - `--jsem N` allows `build-env` and GHC to coordinate usage of CPU resources.  
+    This is usually the fastest, but it requires:
+      - GHC >= 9.8,
+      - that GHC and `build-env` have been compiled against the same libc implementation
+    (see [GHC issue #25087](https://gitlab.haskell.org/ghc/ghc/-/issues/25087)).
 
 ## What does `build-env` do?
 

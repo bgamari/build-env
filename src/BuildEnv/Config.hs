@@ -115,9 +115,6 @@ data RunStrategy
   deriving stock Show
 
 -- | What kind of semaphore to use in 'BuildEnv.Build.buildPlan'?
---
--- NB: this datatype depends on whether the @jsem@ flag
--- was enabled when building the @build-env@ package.
 data AsyncSem
   -- | Create a new 'Control.Concurrent.QSem.QSem' semaphore
   -- with the given number of tokens.
@@ -125,8 +122,7 @@ data AsyncSem
   -- | Create a new system semaphore with the given number of tokens,
   -- passing it to @ghc@ invocations.
   | NewJSem !Word16
-  -- | __@jsem@ only:__ use an existing system semaphore,
-  -- passing it to @ghc@ invocations.
+  -- | Use an existing system semaphore, passing it to @ghc@ invocations.
   | ExistingJSem !String
   deriving stock Show
 
