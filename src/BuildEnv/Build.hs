@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- |
 -- Module      :  BuildEnv.Build
@@ -78,16 +79,10 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( canonicalizePath, createDirectoryIfMissing
+  ( createDirectoryIfMissing
   , doesDirectoryExist, doesFileExist
   , exeExtension, listDirectory
   , removeDirectoryRecursive
-  )
-
--- filepath
-import System.FilePath
-  ( (</>), (<.>)
-  , isAbsolute
   )
 
 -- process
@@ -123,6 +118,7 @@ import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
   , AbstractSem(..), noSem, withNewAbstractSem
   )
+import BuildEnv.Path
 
 --------------------------------------------------------------------------------
 -- Planning.
@@ -151,75 +147,60 @@ computePlan :: TempDirPermanence
             -> Verbosity
             -> Compiler
             -> Cabal
+            -> SymbolicPath CWD ( Dir Project )
             -> CabalFilesContents
             -> IO CabalPlanBinary
-computePlan delTemp verbosity comp cabal ( CabalFilesContents { cabalContents, projectContents } ) =
-  withTempDir delTemp "build" \ dir -> do
-    verboseMsg verbosity $ "Computing plan in build directory " <> Text.pack dir
-    Text.writeFile (dir </> "cabal" <.> "project") projectContents
-    Text.writeFile (dir </> dummyPackageName <.> "cabal") cabalContents
+computePlan delTemp verbosity comp cabal _workDir ( CabalFilesContents { cabalContents, projectContents } ) =
+  withTempDir delTemp "build" \ tmpDir -> do
+    verboseMsg verbosity $ "Computing plan in build directory " <> Text.pack ( show tmpDir )
+    Text.writeFile (getAbsolutePath tmpDir </> "cabal" <.> "project") projectContents
+    Text.writeFile (getAbsolutePath tmpDir </> dummyPackageName <.> "cabal") cabalContents
     let cabalBuildArgs =
           globalCabalArgs cabal ++
             [ "build"
             , "--dry-run"
-            , "--with-compiler", ghcPath comp
+            , "--with-compiler", getAbsolutePath ( ghcPath comp )
             , cabalVerbosity verbosity ]
     debugMsg verbosity $
-      Text.unlines $ "cabal" : map ( ("  " <>) . Text.pack ) cabalBuildArgs
-    callProcessInIO Nothing $
-      CP { cwd          = dir
+      Text.unlines $ "cabal" : map ( ( "  " <> ) . Text.pack ) cabalBuildArgs
+    callProcessInIO @Tmp Nothing $
+      CP { cwd          = absoluteSymbolicPath tmpDir
          , prog         = AbsPath $ cabalPath cabal
          , args         = cabalBuildArgs
          , extraPATH    = []
          , extraEnvVars = []
          , logBasePath  = Nothing
-         , sem          = noSem }
+         , sem          = noSem
+         }
 
-    let planPath = dir </> "dist-newstyle" </> "cache" </> "plan.json"
+    let planPath :: FilePath
+        planPath = getAbsolutePath tmpDir </> "dist-newstyle" </> "cache" </> "plan.json"
     CabalPlanBinary <$> Lazy.ByteString.readFile planPath
 
 -- | The contents of a dummy @cabal.project@ file, specifying
 -- package constraints, flags and allow-newer.
 cabalProjectContentsFromPackages
-  :: FilePath
+  :: SymbolicPath CWD ( Dir Project )
   -> UnitSpecs
   -> PkgSpecs
   -> AllowNewer
   -> Maybe IndexState
-  -> Text
-cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) mbIndexState =
-      packages
-   <> allowNewers
-   <> flagSpecs
-   <> constraints
-   <> indexStateDecl
-  where
+  -> IO Text
+cabalProjectContentsFromPackages workDir units pins ( AllowNewer allowNewer ) mbIndexState = do
 
+  -- Make all the local package paths into absolute paths, as we are
+  -- putting the cabal.project file off in some temporary directory.
+  ( localPkgs :: [ AbsolutePath ( Dir Pkg ) ] )
+    <- traverse ( makeAbsolute workDir ) $ mapMaybe isLocal ( Map.elems units )
+
+  let
     packages
       | null localPkgs
       = "packages: .\n\n"
       | otherwise
       = Text.intercalate ",\n          "
-        ( "packages: ." : map ( Text.pack . makeAbsolute ) ( Map.elems localPkgs ) )
+        ( "packages: ." : map ( Text.pack . getAbsolutePath ) localPkgs )
       <> "\n"
-
-    makeAbsolute :: FilePath -> FilePath
-    makeAbsolute fp
-      | isAbsolute fp
-      = fp
-      | otherwise
-      = workDir </> fp
-
-    isLocal :: (PkgSrc, PkgSpec, Set ComponentName) -> Maybe FilePath
-    isLocal ( Local src, _, _ ) = Just src
-    isLocal _ = Nothing
-    localPkgs = Map.mapMaybe isLocal units
-
-    allPkgs = fmap ( \ ( _, spec, _ ) -> spec ) units
-            `unionPkgSpecsOverriding`
-              pins
-      -- Constraints from the SEED file (units) should override
-      -- constraints from the cabal.config file (pins).
 
     constraints = Text.unlines
         [ Text.unwords ["constraints:", unPkgName nm, cts]
@@ -251,6 +232,26 @@ cabalProjectContentsFromPackages workDir units pins (AllowNewer allowNewer) mbIn
       Nothing -> ""
       Just ( IndexState date ) ->
         Text.unlines [ "index-state: " <> date ]
+
+  return $
+        packages
+     <> allowNewers
+     <> flagSpecs
+     <> constraints
+     <> indexStateDecl
+
+  where
+
+    isLocal :: ( PkgSrc, PkgSpec, Set ComponentName ) -> Maybe ( SymbolicPath Project ( Dir Pkg ) )
+    isLocal ( Local src, _, _ ) = Just src
+    isLocal _ = Nothing
+
+    allPkgs :: PkgSpecs
+    allPkgs = fmap ( \ ( _, spec, _ ) -> spec ) units
+            `unionPkgSpecsOverriding`
+              pins
+      -- Constraints from the SEED file (units) should override
+      -- constraints from the cabal.config file (pins).
 
 -- | The contents of a dummy Cabal file with dependencies on
 -- the specified units (without any constraints).
@@ -318,18 +319,19 @@ data CabalFilesContents
 -- subfolder of the specified directory (e.g. @pkg-name-1.2.3@).
 fetchPlan :: Verbosity
           -> Cabal
+          -> SymbolicPath CWD ( Dir Project )
           -> Maybe IndexState
-          -> FilePath  -- ^ Directory in which to put the sources.
+          -> SymbolicPath Project ( Dir Fetch )  -- ^ Directory in which to put the sources.
           -> CabalPlan
           -> IO ()
-fetchPlan verbosity cabal mbIndexState fetchDir cabalPlan =
+fetchPlan verbosity cabal workDir mbIndexState fetchDir cabalPlan =
     for_ pkgs \ (pkgNm, pkgVer) -> do
       let nameVersion = pkgNameVersion pkgNm pkgVer
           nmVerStr = Text.unpack nameVersion
-      pkgDirExists <- doesDirectoryExist (fetchDir </> nmVerStr)
+      pkgDirExists <- doesDirectoryExist ( interpretSymbolicPath workDir $ fetchDir </> mkRelativePath nmVerStr )
       if   pkgDirExists
       then normalMsg verbosity $ "NOT fetching " <> nameVersion
-      else cabalFetch verbosity cabal mbIndexState fetchDir nmVerStr
+      else cabalFetch verbosity cabal workDir mbIndexState fetchDir nmVerStr
   where
     pkgs :: Set (PkgName, Version)
     pkgs = Set.fromList
@@ -346,8 +348,13 @@ fetchPlan verbosity cabal mbIndexState fetchDir cabalPlan =
       _ -> Nothing
 
 -- | Call @cabal get@ to fetch a single package from Hackage.
-cabalFetch :: Verbosity -> Cabal -> Maybe IndexState -> FilePath -> String -> IO ()
-cabalFetch verbosity cabal mbIndexState root pkgNmVer = do
+cabalFetch :: Verbosity -> Cabal
+           -> SymbolicPath CWD ( Dir Project )
+           -> Maybe IndexState
+           -> SymbolicPath Project ( Dir Fetch )
+           -> String
+           -> IO ()
+cabalFetch verbosity cabal workDir mbIndexState root pkgNmVer = do
     normalMsg verbosity $ "Fetching " <> Text.pack pkgNmVer
     let args = globalCabalArgs cabal ++
                  [ "get"
@@ -355,8 +362,8 @@ cabalFetch verbosity cabal mbIndexState root pkgNmVer = do
                  , cabalVerbosity verbosity ]
                  ++ [ "--index-state=" <> Text.unpack indexState
                     | IndexState indexState <- maybeToList mbIndexState ]
-    callProcessInIO Nothing $
-      CP { cwd          = root
+    callProcessInIO @Fetch Nothing $
+      CP { cwd          = workDir </> root
          , prog         = AbsPath $ cabalPath cabal
          , args
          , extraPATH    = []
@@ -371,14 +378,14 @@ cabalFetch verbosity cabal mbIndexState root pkgNmVer = do
 -- by running their @Setup@ scripts. Libraries will be registered
 -- into a local package database at @installDir/package.conf@.
 buildPlan :: Verbosity
-          -> FilePath
+          -> SymbolicPath CWD ( Dir Project )
               -- ^ Working directory.
               -- Used to compute relative paths for local packages,
               -- and to choose a logging directory.
           -> Paths ForPrep
           -> Paths ForBuild
-          -> Maybe FilePath
-              -- ^ eventlog directory
+          -> Maybe ( SymbolicPath Project ( Dir Logs ) )
+              -- ^ event log directory
           -> BuildStrategy
           -> Bool
              -- ^ @True@ <> resume a previously-started build,
@@ -398,7 +405,7 @@ buildPlan :: Verbosity
 buildPlan verbosity workDir
           pathsForPrep@( Paths { buildPaths = buildPathsForPrep })
           pathsForBuild
-          mbEventLogDir0
+          mbEventLogDir
           buildStrat
           resumeBuild
           mbOnlyBuildDepsOf
@@ -416,24 +423,24 @@ buildPlan verbosity workDir
 
     -- Check the package database exists when it should,
     -- and delete it if we are starting fresh.
-    finalPkgDbExists <- doesDirectoryExist finalPkgDbDir
+    finalPkgDbExists <- doesDirectoryExist ( getAbsolutePath finalPkgDbDir )
     if | resumeBuild && not finalPkgDbExists
-       -> error $ "Cannot resume build: no package database at " <> finalPkgDbDir
+       -> error $ "Cannot resume build: no package database at " <> show finalPkgDbDir
        | not resumeBuild && finalPkgDbExists
-       -> removeDirectoryRecursive finalPkgDbDir
+       -> removeDirectoryRecursive ( getAbsolutePath finalPkgDbDir )
             `catch` \ ( _ :: IOException ) -> return ()
        | otherwise
        -> return ()
 
-    mbEventLogDir <- for mbEventLogDir0 \ eventLogDir0 -> do
-      eventLogDir <- canonicalizePath eventLogDir0
-      createDirectoryIfMissing True eventLogDir
-      return eventLogDir
+    for_ mbEventLogDir \ eventLogDir -> do
+      createDirectoryIfMissing True ( interpretSymbolicPath workDir eventLogDir )
 
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
-                   , "      prefix: " <> Text.pack prefix
-                   , "  installDir: " <> Text.pack installDir ]
+                   , "    work dir: " <> Text.pack ( show workDir )
+                   , "      prefix: " <> Text.pack ( show prefix )
+                   , "  installDir: " <> Text.pack ( show installDir )
+                   ]
 
     mbAlreadyBuilt <-
       if resumeBuild
@@ -460,7 +467,7 @@ buildPlan verbosity workDir
         preparation :: BuildScript
         preparation = do
           logMessage verbosity Verbose $
-            "Creating package database at " <> finalPkgDbDir
+            "Creating package database at " <> show finalPkgDbDir
           createDir finalPkgDbDir
           logMessage verbosity Debug $ "Packages:\n" <>
             unlines
@@ -479,18 +486,18 @@ buildPlan verbosity workDir
         -- Setup the package for this unit.
         unitSetupScript :: ConfiguredUnit -> IO BuildScript
         unitSetupScript pu = do
-          let pkgDirForPrep  = getPkgDir workDir pathsForPrep  pu
-              pkgDirForBuild = getPkgDir workDir pathsForBuild pu
+          let pkgDirForPrep  = getPkgDir pathsForPrep  pu
+              pkgDirForBuild = getPkgDir pathsForBuild pu
           setupPackage verbosity compiler
-            paths pkgDbDirs pkgDirForPrep pkgDirForBuild
+            workDir paths pkgDbDirs pkgDirForPrep pkgDirForBuild
             fullDepMap pu
 
         -- Build and install this unit.
         unitBuildScript :: Args -> ConfiguredUnit -> BuildScript
         unitBuildScript extraConfigureArgs pu@( ConfiguredUnit { puId }) =
-          let pkgDirForBuild = getPkgDir workDir pathsForBuild pu
+          let pkgDirForBuild = getPkgDir pathsForBuild pu
               mbEventLogArg = mbEventLogDir <&> \ logDir ->
-                let logPath = logDir </> "ghc" <.> Text.unpack (unUnitId puId) <.> "eventlog"
+                let logPath = getSymbolicPath logDir </> "ghc" <.> Text.unpack ( unUnitId puId ) <.> "eventlog"
                 in "--ghc-option=\"-with-rtsopts=-l-ol" <> logPath <> "\""
               allConfigureArgs =
                 mconcat [ extraConfigureArgs
@@ -498,7 +505,7 @@ buildPlan verbosity workDir
                         , configureArgs ( userUnitArgs pu ) ]
               allUnitArgs =
                 ( userUnitArgs pu ) { configureArgs = allConfigureArgs }
-          in buildUnit verbosity compiler
+          in buildUnit verbosity compiler workDir
                 paths pkgDbDirs pkgDirForBuild
                 allUnitArgs
                 fullDepMap pu
@@ -519,7 +526,7 @@ buildPlan verbosity workDir
                 Counter { counterRef = unitsBuiltCounterRef
                         , counterMax = nbUnitsToBuild }
 
-            execBuildScript = executeBuildScript unitsBuiltCounter
+            execBuildScript = executeBuildScript workDir unitsBuiltCounter
 
         case runStrat of
 
@@ -592,18 +599,20 @@ buildPlan verbosity workDir
       Script { scriptPath = fp, useVariables } -> do
         let scriptConfig :: ScriptConfig
             scriptConfig =
-              ScriptConfig { scriptOutput = Shell { useVariables }
-                           , scriptStyle  = hostStyle
-                           , scriptTotal  = Just nbUnitsToBuild }
+              ScriptConfig
+                { scriptOutput     = Shell { useVariables }
+                , scriptStyle      = hostStyle
+                , scriptTotal      = Just nbUnitsToBuild
+                , scriptWorkingDir = workDir }
 
-        normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack fp
+        normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack ( show fp )
         buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
           mbSetup <- if   isNothing didSetup
                      then unitSetupScript cu
                      else return emptyBuildScript
           let build = unitBuildScript [] cu
           return $ mbSetup <> build
-        Text.writeFile fp $ script scriptConfig $
+        Text.writeFile ( getSymbolicPath fp ) $ script scriptConfig $
           preparation <> mconcat buildScripts <> finish
 
   where
@@ -709,11 +718,11 @@ getInstalledUnits verbosity
                   plan = do
   pkgVerUnitIds <-
     words <$>
-    Process.readProcess ( ghcPkgPath )
+    Process.readProcess ( getAbsolutePath ghcPkgPath )
       [ "list"
       , ghcPkgVerbosity verbosity
       , "--show-unit-ids", "--simple-output"
-      , "--package-db", finalPkgDbDir ]
+      , "--package-db", getAbsolutePath finalPkgDbDir ]
         -- TODO: allow user package databases too?
       ""
   let installedLibs = map ( UnitId . Text.pack ) pkgVerUnitIds
@@ -732,8 +741,8 @@ getInstalledUnits verbosity
     mkLine ( UnitId uid ) = "  - " <> uid
 
     binsDir :: FilePath
-    binsDir = installDir </> "bin"
-    binDirMaybe :: FilePath -> IO (Maybe UnitId)
+    binsDir = getAbsolutePath installDir </> "bin"
+    binDirMaybe :: FilePath -> IO ( Maybe UnitId )
     binDirMaybe binDir = do
       isDir <- doesDirectoryExist ( binsDir </> binDir )
       if not isDir

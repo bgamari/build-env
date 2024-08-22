@@ -91,6 +91,7 @@ library
       , BuildEnv.Config
       , BuildEnv.File
       , BuildEnv.Script
+      , BuildEnv.Path
       , BuildEnv.Utils
 
     build-depends:

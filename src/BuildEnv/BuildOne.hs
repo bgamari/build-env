@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
 -- |
@@ -46,12 +47,6 @@ import qualified Data.Map.Strict as Map
 -- directory
 import System.Directory
 
--- filepath
-import System.FilePath
-  ( (</>), (<.>)
-  , makeRelative
-  )
-
 -- text
 import Data.Text
   ( Text )
@@ -62,6 +57,7 @@ import qualified Data.Text as Text
 import BuildEnv.Config
 import BuildEnv.CabalPlan
 import BuildEnv.Script
+import BuildEnv.Path
 import BuildEnv.Utils
   ( ProgPath(..), CallProcess(..)
   , abstractQSem, noSem
@@ -75,6 +71,7 @@ import BuildEnv.Utils
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
              -> Compiler
+             -> SymbolicPath CWD ( Dir Project )
              -> BuildPaths ForBuild -- ^ Overall build directory structure.
              -> PkgDbDir   ForBuild -- ^ Package database directory (see 'getPkgDbDirForBuild').
              -> PkgDir     ForPrep  -- ^ Package directory (to find the @Setup.hs@).
@@ -84,6 +81,7 @@ setupPackage :: Verbosity
              -> IO BuildScript
 setupPackage verbosity
              ( Compiler { ghcPath } )
+             workDir
              paths@( BuildPaths { installDir, logDir } )
              ( PkgDbDirForBuild { finalPkgDbDir } )
              ( PkgDir { pkgNameVer, pkgDir = prepPkgDir } )
@@ -91,23 +89,24 @@ setupPackage verbosity
              plan
              unit@( ConfiguredUnit { puId, puSetupDepends, puExeDepends } )
 
-  = do let logPath
+  = do let logPath :: Maybe ( AbsolutePath File )
+           logPath
              | verbosity <= Quiet
              = Nothing
              | otherwise
-             = Just $ logDir </> Text.unpack ( unUnitId puId )
+             = Just $ logDir </> mkRelativePath ( Text.unpack ( unUnitId puId ) )
        -- Find the appropriate Setup.hs file (creating one if necessary)
-       setupHs <- findSetupHs prepPkgDir
+       setupHs <- findSetupHs workDir prepPkgDir
        return do
          scriptCfg <- askScriptConfig
          let isCabalDep uid = case Map.lookup uid plan of
                Nothing -> error $ "setupPackage: cannot find setup dependency " ++ show uid
                Just pu -> planUnitPkgName pu == PkgName "Cabal"
              extraCabalSetupDep = not $ any isCabalDep puSetupDepends
-             setupArgs = [ quoteArg ExpandVars scriptCfg ( buildPkgDir </> setupHs )
+             setupArgs = [ quoteArg ExpandVars scriptCfg ( getSymbolicPath $ setupHs )
                          , "-o"
-                         , quoteArg ExpandVars scriptCfg ( buildPkgDir </> "Setup" )
-                         , "-package-db=" <> quoteArg ExpandVars scriptCfg finalPkgDbDir
+                         , quoteArg ExpandVars scriptCfg ( getSymbolicPath $ mkRelativePath "Setup" )
+                         , "-package-db=" <> quoteArg ExpandVars scriptCfg ( getAbsolutePath finalPkgDbDir )
                          , ghcVerbosity verbosity
                          ] ++ map unitIdArg puSetupDepends
                            ++ [ "-package Cabal" | extraCabalSetupDep ]
@@ -117,7 +116,7 @@ setupPackage verbosity
              -- Specify location of binaries and data directories.
              --
              -- See the commentary around 'depDataDirs' in 'buildUnit'.
-             binDirs = [ quoteArg ExpandVars scriptCfg $ installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
+             binDirs = [ quoteArg ExpandVars scriptCfg $ getAbsolutePath $ installDir </> mkRelativePath ( "bin" </> Text.unpack ( unUnitId exeUnitId ) )
                        | exeUnitId <- puExeDepends ]
              setupDepDataDirs =
                dataDirs scriptCfg paths
@@ -128,8 +127,8 @@ setupPackage verbosity
                  ]
          logMessage verbosity Verbose $
            "Compiling Setup.hs for " <> pkgNameVer
-         callProcess $
-           CP { cwd          = "."
+         callProcess @Pkg $
+           CP { cwd          = workDir </> buildPkgDir
               , prog         = AbsPath ghcPath
               , args         = setupArgs
               , extraPATH    = binDirs
@@ -140,17 +139,21 @@ setupPackage verbosity
 
 -- | Find the @Setup.hs@/@Setup.lhs@ file to use,
 -- or create one using @main = defaultMain@ if none exist.
-findSetupHs :: FilePath -> IO FilePath
-findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
+findSetupHs :: SymbolicPath CWD ( Dir Project )
+            -> SymbolicPath Project ( Dir Pkg )
+            -> IO ( RelativePath Pkg File )
+findSetupHs workDir root =
+  trySetupsOrUseDefault [ mkRelativePath "Setup.hs", mkRelativePath "Setup.lhs" ]
   where
+
     useDefaultSetupHs = do
-        let path = root </> "Setup.hs"
-        writeFile path defaultSetupHs
-        return "Setup.hs"
+        let path = root </> mkRelativePath "Setup.hs"
+        writeFile ( interpretSymbolicPath workDir path ) defaultSetupHs
+        return $ mkRelativePath "Setup.hs"
 
     try fname = do
         let path = root </> fname
-        exists <- doesFileExist path
+        exists <- doesFileExist ( interpretSymbolicPath workDir path )
         return $ if exists then Just fname else Nothing
 
     defaultSetupHs = unlines
@@ -159,7 +162,7 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
         ]
 
     trySetupsOrUseDefault [] = useDefaultSetupHs
-    trySetupsOrUseDefault (setupPath:setups) = do
+    trySetupsOrUseDefault ( setupPath : setups ) = do
       res <- try setupPath
       case res of
         Nothing    -> trySetupsOrUseDefault setups
@@ -178,6 +181,7 @@ findSetupHs root = trySetupsOrUseDefault [ "Setup.hs", "Setup.lhs" ]
 -- registered in the package database.
 buildUnit :: Verbosity
           -> Compiler
+          -> SymbolicPath CWD ( Dir Project )
           -> BuildPaths ForBuild -- ^ Overall build directory structure.
           -> PkgDbDir   ForBuild -- ^ Package database directory (see 'getPkgDbDirForBuild').
           -> PkgDir     ForBuild -- ^ This package's directory (see 'getPkgDir').
@@ -187,6 +191,7 @@ buildUnit :: Verbosity
           -> BuildScript
 buildUnit verbosity
           ( Compiler { ghcPath, ghcPkgPath } )
+          workDir
           paths@( BuildPaths { installDir, prefix, logDir } )
           ( PkgDbDirForBuild
             { finalPkgDbDir
@@ -196,18 +201,21 @@ buildUnit verbosity
                      , mbHaddockArgs = mbUserHaddockArgs
                      , registerArgs  = userGhcPkgArgs } )
           plan unit@( ConfiguredUnit { puId, puDepends, puExeDepends } )
-  = let compName = Text.unpack $ cabalComponent ( puComponentName unit )
-        thisUnit'sId = Text.unpack ( unUnitId puId )
+  = let compName     = Text.unpack $ cabalComponent ( puComponentName unit )
+        thisUnit'sId = Text.unpack $ unUnitId puId
+        logPath :: Maybe ( AbsolutePath File )
         logPath
           | verbosity <= Quiet
           = Nothing
           | otherwise
-          = Just $ logDir </> thisUnit'sId
+          = Just $ logDir </> mkRelativePath thisUnit'sId
         unitPrintableName
           | verbosity >= Verbose
           = pkgNameVer <> ":" <> compName
           | otherwise
           = compName
+        setupDir :: SymbolicPath CWD ( Dir Pkg )
+        setupDir = workDir </> pkgDir
 
     in do
       scriptCfg <- askScriptConfig
@@ -222,7 +230,6 @@ buildUnit verbosity
               , let dep = lookupDependency unit depUnitId plan
               , dep_cu <- maybeToList $ configuredUnitMaybe dep
               ]
-              ++ [ ("prefix", quoteArg ExpandVars scriptCfg prefix) ]
 
       -- Configure
       let flagsArg = case puFlags unit of
@@ -230,7 +237,7 @@ buildUnit verbosity
               | flagSpecIsEmpty flags
               -> []
               | otherwise
-              -> [ "--flags=" <> quoteArg ExpandVars scriptCfg ( Text.unpack (showFlagSpec flags) ) ]
+              -> [ "--flags=" <> quoteArg ExpandVars scriptCfg ( Text.unpack $ showFlagSpec flags ) ]
 
           -- NB: make sure to update the readme after changing
           -- the arguments that are passed here.
@@ -255,10 +262,10 @@ buildUnit verbosity
           -- Arguments essential to the build; can't be overriden by the user.
           essentialConfigureArgs =
             [ "--exact-configuration"
-            , "--with-compiler", quoteArg ExpandVars scriptCfg ghcPath
-            , "--prefix"       , quoteArg ExpandVars scriptCfg prefix
+            , "--with-compiler", quoteArg ExpandVars scriptCfg ( getAbsolutePath ghcPath )
+            , "--prefix"       , quoteArg ExpandVars scriptCfg ( getAbsolutePath prefix )
             , "--cid="        <> Text.unpack ( unUnitId puId )
-            , "--package-db=" <> quoteArg ExpandVars scriptCfg finalPkgDbDir
+            , "--package-db=" <> quoteArg ExpandVars scriptCfg ( getAbsolutePath finalPkgDbDir )
             , "--datadir="    <> quoteArg EscapeVars scriptCfg ( "$prefix" </> "share" )
                 -- Keep datadir in sync with the 'dataDirs' function.
             , "--datasubdir=" <> pkgNameVer
@@ -280,17 +287,19 @@ buildUnit verbosity
           -- dependencies during the build.
           -- Keep this in sync with --bindir in essentialConfigureArgs.
           binDirs = [ quoteArg ExpandVars scriptCfg $
-                      installDir </> "bin" </> Text.unpack ( unUnitId exeUnitId )
+                      getAbsolutePath $
+                      installDir </> mkRelativePath ( "bin" </> Text.unpack ( unUnitId exeUnitId ) )
                     | exeUnitId <- puExeDepends ]
 
+          setupExe :: ProgPath Pkg
           setupExe = RelPath $ runCwdExe scriptCfg "Setup" -- relative to pkgDir
 
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
-        "Configure arguments:\n" <> unlines (map ("  " <>) configureArgs)
-      callProcess $
-        CP { cwd          = pkgDir
+        "Configure arguments:\n" <> unlines ( map ( "  " <> ) configureArgs )
+      callProcess @Pkg $
+        CP { cwd          = setupDir
            , prog         = setupExe
            , args         = "configure" : configureArgs
            , extraPATH    = binDirs
@@ -302,8 +311,8 @@ buildUnit verbosity
       -- Build
       logMessage verbosity Verbose $
         "Building " <> unitPrintableName
-      callProcess $
-        CP { cwd          = pkgDir
+      callProcess @Pkg $
+        CP { cwd          = setupDir
            , prog         = setupExe
            , args         = [ "build"
                             , "--builddir=" <> buildDir
@@ -318,8 +327,8 @@ buildUnit verbosity
       for_ mbUserHaddockArgs \ userHaddockArgs -> do
         logMessage verbosity Verbose $
           "Building documentation for " <> unitPrintableName
-        callProcess $
-          CP { cwd          = pkgDir
+        callProcess @Pkg $
+          CP { cwd          = setupDir
              , prog         = setupExe
              , args         = [ "haddock"
                               , setupVerbosity verbosity ]
@@ -334,12 +343,12 @@ buildUnit verbosity
        -- Copy
       logMessage verbosity Verbose $
         "Copying " <> unitPrintableName
-      callProcess $
-        CP { cwd          = pkgDir
+      callProcess @Pkg $
+        CP { cwd          = setupDir
            , prog         = setupExe
            , args         = [ "copy", setupVerbosity verbosity
                             , "--builddir=" <> buildDir
-                            , "--target-package-db=" <> quoteArg ExpandVars scriptCfg (installDir </> "package.conf")
+                            , "--target-package-db=" <> quoteArg ExpandVars scriptCfg (getAbsolutePath $ installDir </> mkRelativePath "package.conf")
                             ]
            , extraPATH    = []
            , extraEnvVars = setupEnvVars
@@ -356,11 +365,11 @@ buildUnit verbosity
           logMessage verbosity Verbose $
            mconcat [ "Registering ", unitPrintableName
                    , " in package database at:\n  "
-                   , finalPkgDbDir ]
+                   , show finalPkgDbDir ]
 
           -- Setup register
-          callProcess $
-            CP { cwd          = pkgDir
+          callProcess @Pkg $
+            CP { cwd          = setupDir
                , prog         = setupExe
                , args         = [ "register", setupVerbosity verbosity
                                 , "--builddir=" <> buildDir
@@ -376,14 +385,14 @@ buildUnit verbosity
           -- and not a directory of registration files.
 
           -- ghc-pkg register
-          callProcess $
-            CP { cwd          = pkgDir
+          callProcess @Pkg $
+            CP { cwd          = setupDir
                , prog         = AbsPath ghcPkgPath
                , args         = [ "register"
                                 , ghcPkgVerbosity verbosity
                                 , "--force" ]
                                 ++ userGhcPkgArgs
-                                ++ [ "--package-db", quoteArg ExpandVars scriptCfg finalPkgDbDir
+                                ++ [ "--package-db", quoteArg ExpandVars scriptCfg ( getAbsolutePath finalPkgDbDir )
                                    , pkgRegsFile ]
                , extraPATH    = []
                , extraEnvVars = []
@@ -451,12 +460,12 @@ data family PkgDbDir use
 
 data instance PkgDbDir ForPrep
   = PkgDbDirForPrep
-    { finalPkgDbDir  :: !FilePath
+    { finalPkgDbDir  :: !( AbsolutePath ( Dir PkgDb ) )
         -- ^ Installation package database directory.
     }
 data instance PkgDbDir ForBuild
   = PkgDbDirForBuild
-    { finalPkgDbDir :: !FilePath
+    { finalPkgDbDir :: !( AbsolutePath ( Dir PkgDb ) )
         -- ^ Installation package database directory.
     , finalPkgDbSem :: !QSem
         -- ^ Semaphore controlling access to the installation
@@ -467,7 +476,7 @@ data instance PkgDbDir ForBuild
 -- to use.
 getPkgDbDirForPrep :: Paths ForPrep -> PkgDbDir ForPrep
 getPkgDbDirForPrep ( Paths { buildPaths = BuildPathsForPrep { installDir } } ) =
-    PkgDbDirForPrep { finalPkgDbDir = installDir </> "package.conf" }
+    PkgDbDirForPrep { finalPkgDbDir = installDir </> mkRelativePath "package.conf" }
 
 -- | Compute the paths of the package database directory we are going
 -- to use, and create some semaphores to control access to it
@@ -478,7 +487,7 @@ getPkgDbDirForBuild ( Paths { buildPaths = BuildPaths { installDir } } ) = do
   return $
     PkgDbDirForBuild { finalPkgDbDir, finalPkgDbSem }
     where
-      finalPkgDbDir = installDir </> "package.conf"
+      finalPkgDbDir = installDir </> mkRelativePath "package.conf"
 
 -- | The package @name-version@ string and its directory.
 type PkgDir :: PathUsability -> Type
@@ -486,7 +495,7 @@ data PkgDir use
   = PkgDir
     { pkgNameVer :: !String
         -- ^ Package @name-version@ string.
-    , pkgDir     :: !FilePath
+    , pkgDir     :: !( SymbolicPath Project ( Dir Pkg ) )
         -- ^ Package directory.
     }
 type role PkgDir representational
@@ -494,31 +503,26 @@ type role PkgDir representational
   -- a @PkgDir ForBuild@.
 
 -- | Compute the package directory location.
-getPkgDir :: FilePath
-              -- ^ Working directory
-              -- (used only to relativise paths to local packages).
-          -> Paths use
+getPkgDir :: Paths use
               -- ^ Overall directory structure to base the computation off.
           -> ConfiguredUnit
               -- ^ Any unit from the package in question.
           -> PkgDir use
-getPkgDir workDir ( Paths { fetchDir } )
+getPkgDir ( Paths { fetchDir } )
           ( ConfiguredUnit { puPkgName, puVersion, puPkgSrc } )
   = PkgDir { pkgNameVer, pkgDir }
     where
       pkgNameVer = Text.unpack $ pkgNameVersion puPkgName puVersion
       pkgDir
         | Local dir <- puPkgSrc
-        = makeRelative workDir dir
-          -- Give local packages paths relative to the working directory,
-          -- to enable relocatable build scripts.
+        = dir
         | otherwise
-        = fetchDir </> pkgNameVer
+        = fetchDir </> mkRelativePath pkgNameVer
 
 -- | Command to run an executable located the current working directory.
-runCwdExe :: ScriptConfig -> FilePath -> FilePath
+runCwdExe :: ScriptConfig -> String -> SymbolicPath from File
 runCwdExe ( ScriptConfig { scriptOutput, scriptStyle } )
-  = pre . ext
+  = mkSymbolicPath . pre . ext
   where
     pre
       | Run <- scriptOutput
@@ -539,6 +543,6 @@ dataDirs :: ScriptConfig
 dataDirs scriptCfg ( BuildPaths { installDir } ) units =
     [ ( mangledPkgName puPkgName <> "_datadir"
       , quoteArg ExpandVars scriptCfg $
-          installDir </> "share" </> Text.unpack (pkgNameVersion puPkgName puVersion) )
+          getAbsolutePath $ installDir </> mkRelativePath ( "share" </> Text.unpack ( pkgNameVersion puPkgName puVersion ) ) )
         -- Keep this in sync with --datadir in essentialConfigureArgs.
     | ConfiguredUnit { puPkgName, puVersion } <- units ]

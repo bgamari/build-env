@@ -1,4 +1,5 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE ExistentialQuantification #-}
 {-# LANGUAGE PolyKinds #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -36,10 +37,12 @@ import Control.Concurrent.QSem
   ( QSem, newQSem, signalQSem, waitQSem )
 import Control.Exception
   ( bracket, bracket_ )
+import Data.Kind
+  ( Type )
 import Data.List
   ( intercalate )
 import Data.Maybe
-  ( fromMaybe )
+  ( maybeToList )
 import Data.IORef
   ( readIORef )
 import System.Environment
@@ -63,11 +66,11 @@ import qualified Data.Map.Strict as Map
 
 -- directory
 import System.Directory
-  ( createDirectoryIfMissing, makeAbsolute )
+  ( createDirectoryIfMissing )
 
 -- filepath
 import System.FilePath
-  ( (</>), (<.>), takeDirectory )
+  ( takeDirectory )
 
 -- process
 import qualified System.Process as Proc
@@ -94,32 +97,34 @@ import BuildEnv.Config
   , TempDirPermanence(..)
   , pATHSeparator, hostStyle
   )
+import BuildEnv.Path
 
 --------------------------------------------------------------------------------
 
 -- | The path of a program to run.
-data ProgPath
+type ProgPath :: Type -> Type
+data ProgPath from
   -- | An absolute path, or an executable in @PATH@.
-  = AbsPath { progPath :: !FilePath }
-  -- | A relative path. What it is relative to depends on context.
-  | RelPath { progPath :: !FilePath }
+  = AbsPath { absProgPath :: !( AbsolutePath File ) }
+  -- | A relative path, relative to the @from@ abstract location.
+  | RelPath { relProgPath :: !( SymbolicPath from File ) }
 
 -- | Arguments to 'callProcess'.
-data CallProcess
+data CallProcess dir
   = CP
-  { cwd          :: !FilePath
+  { cwd          :: !( SymbolicPath CWD ( Dir dir ) )
      -- ^ Working directory.
-  , extraPATH    :: ![FilePath]
+  , extraPATH    :: ![ FilePath ]
      -- ^ Absolute filepaths to add to PATH.
-  , extraEnvVars :: ![(String, String)]
-     -- ^ Extra envi!ronment variables to add before running the command.
-  , prog         :: !ProgPath
+  , extraEnvVars :: ![ ( String, String ) ]
+     -- ^ Extra environment variables to add before running the command.
+  , prog         :: !( ProgPath dir )
      -- ^ The program to run.
      --
      -- If it's a relative path, it should be relative to the @cwd@ field.
   , args         :: !Args
      -- ^ Arguments to the program.
-  , logBasePath  :: !( Maybe FilePath )
+  , logBasePath  :: !( Maybe ( AbsolutePath File ) )
      -- ^ Log @stdout@ to @basePath.stdout@ and @stderr@ to @basePath.stderr@.
   , sem          :: !AbstractSem
      -- ^ Lock to take when calling the process
@@ -136,13 +141,13 @@ callProcessInIO :: HasCallStack
                 => Maybe Counter
                     -- ^ Optional counter. Used when the command fails,
                     -- to report the progress that has been made so far.
-                -> CallProcess
+                -> CallProcess dir
                 -> IO ()
 callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBasePath, sem } ) = do
   absProg <-
     case prog of
       AbsPath p -> return p
-      RelPath p -> makeAbsolute $ cwd </> p
+      RelPath p -> makeAbsolute cwd p
         -- Needs to be an absolute path, as per the @process@ documentation:
         --
         --   If cwd is provided, it is implementation-dependent whether
@@ -156,8 +161,8 @@ callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBa
         | null args = ""
         | otherwise = " " ++ unwords args
       command =
-        [ "  > " ++ absProg ++ argsStr
-        , "  CWD = " ++ cwd ]
+        [ "  > " ++ show absProg ++ argsStr
+        , "  CWD = " ++ show cwd ]
   env <-
     if null extraPATH && null extraEnvVars
     then return Nothing
@@ -171,17 +176,17 @@ callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBa
         Just logPath -> do
           let stdoutFile = logPath <.> "stdout"
               stderrFile = logPath <.> "stderr"
-          createDirectoryIfMissing True $ takeDirectory logPath
-          withFile stdoutFile AppendMode \ stdoutFileHandle ->
-            withFile stderrFile AppendMode \ stderrFileHandle -> do
+          createDirectoryIfMissing True $ takeDirectory $ getAbsolutePath logPath
+          withFile ( getAbsolutePath stdoutFile ) AppendMode \ stdoutFileHandle ->
+            withFile ( getAbsolutePath stderrFile ) AppendMode \ stderrFileHandle -> do
               hDuplicateTo System.Handle.stderr stderrFileHandle
                 -- Write stderr to the log file and to the terminal.
               hPutStrLn stdoutFileHandle ( unlines command )
               action ( Proc.UseHandle stdoutFileHandle, Proc.UseHandle stderrFileHandle )
   withHandles \ ( stdoutStream, stderrStream ) -> do
     let processArgs =
-          ( Proc.proc absProg args )
-            { Proc.cwd     = if cwd == "." then Nothing else Just cwd
+          ( Proc.proc ( getAbsolutePath absProg ) args )
+            { Proc.cwd     = if getSymbolicPath cwd == "." then Nothing else Just ( getSymbolicPath cwd )
             , Proc.env     = env
             , Proc.std_out = stdoutStream
             , Proc.std_err = stderrStream }
@@ -203,7 +208,7 @@ callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBa
         case stderrStream of
           Proc.UseHandle errHandle ->
             hPutStrLn errHandle
-              ( unlines $ msg ++ [ "Logs are available at: " <> fromMaybe "" logBasePath <> ".{stdout, stderr}" ] )
+              ( unlines $ msg ++ [ "Logs are available at: " <> getAbsolutePath logs <> ".{stdout, stderr}" | logs <- maybeToList logBasePath ] )
           _ -> putStrLn (unlines msg)
         exitWith res
 
@@ -220,15 +225,15 @@ augmentSearchPath var paths = Map.alter f var
 withTempDir :: TempDirPermanence  -- ^ whether to delete the temporary directory
                                   -- after the action completes
             -> String             -- ^ directory name template
-            -> (FilePath -> IO a) -- ^ action to perform
+            -> ( AbsolutePath ( Dir Tmp ) -> IO a ) -- ^ action to perform
             -> IO a
 withTempDir del name k =
   case del of
     DeleteTempDirs
-      -> withSystemTempDirectory name k
+      -> withSystemTempDirectory name ( k . mkAbsolutePath )
     Don'tDeleteTempDirs
       -> do root <- getCanonicalTemporaryDirectory
-            createTempDirectory root name >>= k
+            createTempDirectory root name >>= ( k . mkAbsolutePath )
 
 -- | Utility list 'splitOn' function.
 splitOn :: Char -> String -> [String]

@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -96,6 +97,9 @@ import Data.Set
 import Data.Text
   ( Text )
 import qualified Data.Text as Text
+
+-- build-env
+import BuildEnv.Path
 
 -------------------------------------------------------------------------------
 -- Build plans
@@ -244,7 +248,7 @@ flagSpecIsEmpty (FlagSpec fs) = null fs
 --   - @Just fp@: specified by the @cabal@ file at the given path.
 data PkgSrc
   = Remote
-  | Local !FilePath
+  | Local !( SymbolicPath Project ( Dir Pkg ) )
   deriving stock Show
 
 instance Semigroup PkgSrc where
@@ -258,7 +262,7 @@ instance FromJSON PkgSrc where
     parseJSON = withObject "package source" \ o -> do
       ty <- o .: "type"
       case ty :: Text of
-        "local"       -> Local <$> o .: "path"
+        "local"       -> Local . mkSymbolicPath <$> o .: "path"
         "repo-tar"    -> return Remote
                          -- <$> o .: "repo"
         _ ->
@@ -391,7 +395,7 @@ unitDepends (ConfiguredUnit { puDepends, puExeDepends }) =
 
 -- | A mapping from a package name to its flags, constraints,
 -- and components we want to build from it.
-type UnitSpecs = Strict.Map PkgName (PkgSrc, PkgSpec, Set ComponentName)
+type UnitSpecs = Strict.Map PkgName ( PkgSrc, PkgSpec, Set ComponentName )
 
 -- | The name of a cabal component, e.g. @lib:comp@.
 data ComponentName =
