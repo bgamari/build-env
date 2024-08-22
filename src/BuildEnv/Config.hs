@@ -119,13 +119,11 @@ data RunStrategy
 -- NB: this datatype depends on whether the @jsem@ flag
 -- was enabled when building the @build-env@ package.
 data AsyncSem
-  -- | Don't use any semaphore (not recommended).
-  = NoSem
   -- | Create a new 'Control.Concurrent.QSem.QSem' semaphore
   -- with the given number of tokens.
-  | NewQSem !Word16
-  -- | __@jsem@ only:__ create a new system semaphore with the given number
-  -- of tokens, passing it to @ghc@ invocations.
+  = NewQSem !Word16
+  -- | Create a new system semaphore with the given number of tokens,
+  -- passing it to @ghc@ invocations.
   | NewJSem !Word16
   -- | __@jsem@ only:__ use an existing system semaphore,
   -- passing it to @ghc@ invocations.
@@ -135,7 +133,6 @@ data AsyncSem
 -- | A description of the kind of semaphore we are using to control concurrency.
 semDescription :: AsyncSem -> Text
 semDescription = \case
-  NoSem     -> "no semaphore"
   NewQSem i -> "-j" <> Text.pack (show i)
   NewJSem i -> "--jsem " <> Text.pack (show i)
   ExistingJSem jsemName ->

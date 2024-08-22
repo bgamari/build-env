@@ -11,10 +11,14 @@
 module BuildEnv.Parse ( options, runOptionsParser ) where
 
 -- base
+import Control.Concurrent
+  ( getNumCapabilities )
 import Data.Char
   ( isSpace )
 import Data.Bool
   ( bool )
+import Data.Word
+  ( Word16 )
 import System.Environment
   ( getArgs )
 import Text.Read
@@ -53,12 +57,14 @@ import BuildEnv.Utils
 runOptionsParser :: IO ( GlobalOpts, Mode )
 runOptionsParser = do
   args <- getArgs
-  handleParseResult $ execParserPure pPrefs pInfo args
-  where
+  caps <- NumCapabilities . fromIntegral <$> getNumCapabilities
+  let
     pInfo =
-      info ( helper <*> options )
+      info ( helper <*> options caps )
         (  fullDesc
         <> header "build-env - compute, fetch and build Cabal build plans" )
+  handleParseResult $ execParserPure pPrefs pInfo args
+  where
     pPrefs = prefs $
       mconcat [ showHelpOnEmpty
               , subparserInline
@@ -66,10 +72,13 @@ runOptionsParser = do
               , multiSuffix "*"
               , columns 90 ]
 
+newtype NumCapabilities = NumCapabilities { numCapabilities :: Word16 }
+  deriving stock ( Show, Eq, Ord )
+
 -- | The command-line options parser for the 'build-env' executable.
-options :: Parser ( GlobalOpts, Mode )
-options = do
-  mode       <- optMode
+options :: NumCapabilities -> Parser ( GlobalOpts, Mode )
+options caps = do
+  mode       <- optMode caps
   globalOpts <- optGlobalOpts
   pure ( globalOpts, mode )
 
@@ -157,8 +166,8 @@ optIndexState =
     helpStr = "Use Hackage state as of DATE, e.g. 2022-12-25T00:00:00Z"
 
 -- | Parse the mode in which to run the application: plan, fetch, build.
-optMode :: Parser Mode
-optMode =
+optMode :: NumCapabilities -> Parser Mode
+optMode caps =
   hsubparser . mconcat $
     [ command "plan"  $
         info ( PlanMode  <$> planInputs Planning <*> optOutput )
@@ -167,7 +176,7 @@ optMode =
         info ( FetchMode <$> fetchDescription <*> newOrExisting )
         ( fullDesc <> fetchInfo )
     , command "build" $
-        info ( BuildMode <$> build )
+        info ( BuildMode <$> build caps )
         ( fullDesc <> buildInfo )
     ]
   where
@@ -366,8 +375,8 @@ newOrExisting =
              <> help "Update existing fetched sources directory" )
 
 -- | Parse the options for the @build@ command.
-build :: Parser Build
-build = do
+build :: NumCapabilities -> Parser Build
+build ( NumCapabilities numCaps ) = do
 
   buildBuildPlan <- plan Building
   buildStart     <- optStart
@@ -400,20 +409,33 @@ build = do
         <> help "Use a system semaphore to control parallelism"
         <> metavar "[N|SEM_NAME]" )
       <|>
-      option ( fmap NewQSem auto )
+      option ( fmap NewQSem j )
         (  short 'j'
         <> help "Use asynchronous package building"
-        <> metavar "N" )
-      <|>
-      pure NoSem
+        <> metavar "[N]" )
+
+    j :: ReadM Word16
+    j = do
+      x <- str
+      if null x
+      then return numCaps
+      else
+        case readMaybe x of
+          Just n -> return n
+          Nothing ->
+           readerError $
+             "Invalid -j argument: " <> x
 
     jsem :: ReadM AsyncSem
     jsem = do
       x <- str
       return $
-        case readMaybe x of
-          Just n  -> NewJSem n
-          Nothing -> ExistingJSem x
+        if null x
+        then NewJSem numCaps
+        else
+          case readMaybe x of
+            Just n  -> NewJSem n
+            Nothing -> ExistingJSem x
 
     optScript :: Parser BuildStrategy
     optScript = do

@@ -259,7 +259,6 @@ withNewAbstractSem :: AsyncSem
                    -> IO r
 withNewAbstractSem whatSem f =
   case whatSem of
-    NoSem -> f noSem []
     NewQSem n -> do
       qsem <- newQSem ( fromIntegral n )
       f ( abstractQSem qsem ) []
