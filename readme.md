@@ -18,6 +18,7 @@ in hermetic build environments.
   - [Narrowing a build down (for debugging)](#narrowing-a-build-down-for-debugging)
 - [Bootstrapping](#bootstrapping)
   - [Bootstrap arguments](#bootstrap-arguments)
+  - [Ninja](#ninja)
 - [Specifying packages](#specifying-packages)
   - [Local packages](#local-packages)
 
@@ -220,6 +221,16 @@ you should pass the `--variables` flag. This will set these to the values
 `$SOURCES`, `$PREFIX` and `$DESTDIR` in the output shell script, respectively.
 These should be set to absolute paths before running the script.  
 The script will also use `$GHC` and `$GHCPKG` variables for the compiler.  
+
+### Ninja
+
+`build-env` can also generate [Ninja](https://ninja-build.org/) files,
+which support parallel execution (unlike simple shell scripts):
+
+```
+$ build-env build lens -f sources -o install --script build_lens.ninja --ninja
+$ ninja -f build_lens.ninja
+```
 
 ## Specifying packages
 
