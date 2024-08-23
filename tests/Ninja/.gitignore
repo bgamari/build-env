@@ -1,0 +1,5 @@
+install/
+sources/
+logs/
+*.json
+*.ninja

@@ -16,6 +16,7 @@ module BuildEnv.Config
   ( -- * Build strategy
     BuildStrategy(..), RunStrategy(..)
   , AsyncSem(..), semDescription
+  , ScriptType(..)
 
    -- * Passing arguments
   , Args, UnitArgs(..)
@@ -45,6 +46,9 @@ module BuildEnv.Config
     -- * OS specifics
   , Style(..), hostStyle
   , pATHSeparator
+
+    -- * Process environment
+  , ProcessEnv(..)
 
   ) where
 
@@ -89,17 +93,26 @@ data BuildStrategy
   -- | Execute the build plan in-place.
   = Execute RunStrategy
   -- | Output a build script that can be run later.
-  | Script
+  | GenerateScript
     { scriptPath   :: !( SymbolicPath CWD File )
       -- ^ Output path at which to write the build script.
+    , scriptType   :: !ScriptType
+      -- ^ Whether to generate a shell script or a ninja file.
     , useVariables :: !Bool
-      -- ^ Should the output shell script use variables, or baked in paths?
+      -- ^ Should the output script use variables, or baked in paths?
       --
-      -- The shell script will use the following variables:
+      -- The script will use the following variables:
       --
       -- - @GHC@, @GHCPKG@, @SOURCES@, @PREFIX@, @DESTDIR@.
     }
   deriving stock Show
+
+data ScriptType
+  -- | A shell script.
+  = Shell
+  -- | A ninja file.
+  | Ninja
+  deriving stock ( Show, Eq )
 
 -- | How to execute a build plan.
 data RunStrategy
@@ -258,7 +271,7 @@ canonicalizePaths compiler buildStrat workDir
 
 
       logDir <- case buildStrat of
-        Script  {} -> return $ mkAbsolutePath "${LOGDIR}" -- LOGDIR is defined by the script.
+        GenerateScript {} -> return $ mkAbsolutePath "${LOGDIR}" -- LOGDIR is defined by the script.
         Execute {} -> do
           -- Pick the logging directory based on the current time.
           time <- getCurrentTime
@@ -266,7 +279,7 @@ canonicalizePaths compiler buildStrat workDir
             ( mkSymbolicPath $ "logs" </> formatTime defaultTimeLocale "%0Y-%m-%d_%H-%M-%S" time )
 
       let forBuild = case buildStrat of
-            Script { useVariables }
+            GenerateScript { useVariables }
               | useVariables
               -> Paths { fetchDir   = mkSymbolicPath "${SOURCES}"
                        , buildPaths =
@@ -391,3 +404,20 @@ hostStyle =
 #else
   PosixStyle
 #endif
+
+--------------------------------------------------------------------------------
+-- Process environment for building individual packages.
+
+-- | The environment necessary for building a package.
+data ProcessEnv dir =
+  ProcessEnv
+    { cwd :: !( SymbolicPath CWD ( Dir dir ) )
+      -- ^ Working directory.
+    , extraPATH :: ![ FilePath ]
+      -- ^ Extra programs to add to PATH.
+    , extraEnvVars :: ![ ( String, FilePath ) ]
+      -- ^ Extra environment variables to set.
+    , logBasePath  :: !( Maybe ( AbsolutePath File ) )
+       -- ^ Log @stdout@ to @basePath.stdout@ and @stderr@ to @basePath.stderr@.
+    }
+  deriving stock Show

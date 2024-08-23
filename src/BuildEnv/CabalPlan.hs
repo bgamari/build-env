@@ -105,13 +105,13 @@ import BuildEnv.Path
 -- Build plans
 
 -- | Units in a Cabal @plan.json@ file.
-newtype CabalPlan = CabalPlan { planUnits :: [PlanUnit] }
+newtype CabalPlan = CabalPlan { planUnits :: [ PlanUnit ] }
 
-mapMaybePlanUnits :: (PlanUnit -> Maybe a) -> CabalPlan -> [a]
-mapMaybePlanUnits f (CabalPlan units) = mapMaybe f units
+mapMaybePlanUnits :: ( PlanUnit -> Maybe a ) -> CabalPlan -> [ a ]
+mapMaybePlanUnits f ( CabalPlan units ) = mapMaybe f units
 
 instance Show CabalPlan where
-  show (CabalPlan us)
+  show ( CabalPlan us )
     = unlines $ map show us
 
 instance FromJSON CabalPlan where
@@ -123,9 +123,9 @@ newtype CabalPlanBinary = CabalPlanBinary Lazy.ByteString
 
 -- | Decode a 'CabalPlanBinary' into a 'CabalPlan'.
 parsePlanBinary :: CabalPlanBinary -> CabalPlan
-parsePlanBinary (CabalPlanBinary pb) =
+parsePlanBinary ( CabalPlanBinary pb ) =
   case eitherDecode pb of
-    Left  err  -> error ("parsePlanBinary: failed to parse plan JSON\n" ++ err)
+    Left  err  -> error $ "parsePlanBinary: failed to parse plan JSON\n" ++ err
     Right plan -> plan
 
 -------------------------------------------------------------------------------
@@ -134,11 +134,11 @@ parsePlanBinary (CabalPlanBinary pb) =
 -- | A cabal package name, e.g. @lens@, @aeson@.
 newtype PkgName = PkgName { unPkgName :: Text }
     deriving stock   Show
-    deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
+    deriving newtype ( Eq, Ord, FromJSON, FromJSONKey )
 
 -- | The @name-version@ string of a package.
 pkgNameVersion :: PkgName -> Version -> Text
-pkgNameVersion (PkgName n) v = n <> "-" <> Text.pack (showVersion v)
+pkgNameVersion ( PkgName n ) v = n <> "-" <> Text.pack ( showVersion v )
 
 -- | Is the string a valid @cabal@ package name? That is, does it consist
 -- only of alphanumeric identifiers and hyphens?
@@ -157,7 +157,7 @@ mangledPkgName = map fixupChar . Text.unpack . unPkgName
     fixupChar c   = c
 
 -- | A collection of allow-newer specifications, e.g. @pkg1:pkg2,*:base@.
-newtype AllowNewer = AllowNewer ( Set (Text, Text) )
+newtype AllowNewer = AllowNewer ( Set ( Text, Text ) )
   deriving stock Show
   deriving newtype ( Semigroup, Monoid )
 
@@ -207,8 +207,8 @@ unionUnitSpecsCombining = Map.unionWith (<>)
 
 -- | Left-biased union of package flags and constraints.
 unionPkgSpec :: PkgSpec -> PkgSpec -> PkgSpec
-unionPkgSpec (PkgSpec strongCts strongFlags) (PkgSpec weakCts weakFlags)
-  = PkgSpec cts (strongFlags <> weakFlags)
+unionPkgSpec ( PkgSpec strongCts strongFlags ) ( PkgSpec weakCts weakFlags )
+  = PkgSpec cts ( strongFlags <> weakFlags )
     where
       cts = case strongCts of
         Nothing -> weakCts
@@ -227,9 +227,9 @@ instance Semigroup Constraints where
 -- | Specification of package flags, e.g. @+foo -bar@.
 --
 -- @+@ corresponds to @True@ and @-@ to @False@.
-newtype FlagSpec = FlagSpec (Strict.Map Text Bool)
+newtype FlagSpec = FlagSpec ( Strict.Map Text Bool )
     deriving stock   Show
-    deriving newtype (Eq, Ord, Semigroup, Monoid, FromJSON)
+    deriving newtype ( Eq, Ord, Semigroup, Monoid, FromJSON )
 
 showFlagSpec :: FlagSpec -> Text
 showFlagSpec (FlagSpec fs) =
@@ -277,7 +277,7 @@ instance FromJSON PkgSrc where
 -- e.g. @lens-5.2-1bfd85cb66d2330e59a2f957e87cac993d922401@.
 newtype UnitId = UnitId { unUnitId :: Text }
     deriving stock Show
-    deriving newtype (Eq, Ord, FromJSON, FromJSONKey)
+    deriving newtype ( Eq, Ord, FromJSON, FromJSONKey )
 
 data PlanUnit
   = PU_Preexisting !PreexistingUnit
@@ -285,16 +285,16 @@ data PlanUnit
   deriving stock Show
 
 planUnitUnitId :: PlanUnit -> UnitId
-planUnitUnitId (PU_Preexisting (PreexistingUnit { puId })) = puId
-planUnitUnitId (PU_Configured  (ConfiguredUnit  { puId })) = puId
+planUnitUnitId ( PU_Preexisting ( PreexistingUnit { puId } ) ) = puId
+planUnitUnitId ( PU_Configured  ( ConfiguredUnit  { puId } ) ) = puId
 
 planUnitPkgName :: PlanUnit -> PkgName
-planUnitPkgName (PU_Preexisting (PreexistingUnit { puPkgName })) = puPkgName
-planUnitPkgName (PU_Configured  (ConfiguredUnit  { puPkgName })) = puPkgName
+planUnitPkgName ( PU_Preexisting ( PreexistingUnit { puPkgName } ) ) = puPkgName
+planUnitPkgName ( PU_Configured  ( ConfiguredUnit  { puPkgName } ) ) = puPkgName
 
 planUnitVersion :: PlanUnit -> Version
-planUnitVersion (PU_Preexisting (PreexistingUnit { puVersion })) = puVersion
-planUnitVersion (PU_Configured  (ConfiguredUnit  { puVersion })) = puVersion
+planUnitVersion ( PU_Preexisting ( PreexistingUnit { puVersion } ) ) = puVersion
+planUnitVersion ( PU_Configured  ( ConfiguredUnit  { puVersion } ) ) = puVersion
 
 instance FromJSON PlanUnit where
     parseJSON = withObject "plan unit" \ o -> do
@@ -350,13 +350,13 @@ instance FromJSON PlanUnit where
                  return (ComponentName Lib (unPkgName puPkgName), deps, exeDeps, setupDeps)
            return $ ConfiguredUnit {..}
 
--- | Information about a built-in pre-existing unit (such as @base@).
+-- | Information about a built-in pre-existing unit (such as the @ghc@ library).
 data PreexistingUnit
   = PreexistingUnit
     { puId      :: !UnitId
     , puPkgName :: !PkgName
     , puVersion :: !Version
-    , puDepends :: ![UnitId]
+    , puDepends :: ![ UnitId ]
     }
   deriving stock Show
 
@@ -368,16 +368,16 @@ data ConfiguredUnit
     , puVersion       :: !Version
     , puComponentName :: !ComponentName
     , puFlags         :: !FlagSpec
-    , puDepends       :: ![UnitId]
-    , puExeDepends    :: ![UnitId]
-    , puSetupDepends  :: ![UnitId]
+    , puDepends       :: ![ UnitId ]
+    , puExeDepends    :: ![ UnitId ]
+    , puSetupDepends  :: ![ UnitId ]
     , puPkgSrc        :: !PkgSrc
     }
   deriving stock Show
 
 configuredUnitMaybe :: PlanUnit -> Maybe ConfiguredUnit
-configuredUnitMaybe (PU_Configured pu)  = Just pu
-configuredUnitMaybe (PU_Preexisting {}) = Nothing
+configuredUnitMaybe ( PU_Configured pu )  = Just pu
+configuredUnitMaybe ( PU_Preexisting {} ) = Nothing
 
 -- | Get what kind of component this unit is: @lib@, @exe@, etc.
 cuComponentType :: ConfiguredUnit -> ComponentType
@@ -385,12 +385,12 @@ cuComponentType = componentType . puComponentName
 
 -- | All the dependencies of a unit: @depends@, @exe-depends@ and @setup-depends@.
 allDepends :: ConfiguredUnit -> [UnitId]
-allDepends (ConfiguredUnit { puDepends, puExeDepends, puSetupDepends }) =
+allDepends ( ConfiguredUnit { puDepends, puExeDepends, puSetupDepends } ) =
   puDepends ++ puExeDepends ++ puSetupDepends
 
 -- | The dependencies of a unit, excluding @setup-depends@.
 unitDepends :: ConfiguredUnit -> [UnitId]
-unitDepends (ConfiguredUnit { puDepends, puExeDepends }) =
+unitDepends ( ConfiguredUnit { puDepends, puExeDepends } ) =
   puDepends ++ puExeDepends
 
 -- | A mapping from a package name to its flags, constraints,
@@ -408,7 +408,7 @@ data ComponentName =
 
 -- | Print a cabal component using colon syntax @ty:comp@.
 cabalComponent :: ComponentName -> Text
-cabalComponent (ComponentName ty nm) = cabalComponentType ty <> ":" <> nm
+cabalComponent ( ComponentName ty nm ) = cabalComponentType ty <> ":" <> nm
 
 -- | Parse a cabal package component, using the syntax @pkg:ty:comp@,
 -- e.g. @attoparsec:lib:attoparsec-internal@.
@@ -443,7 +443,7 @@ data ComponentType
   | Test
   | Bench
   | Setup
-  deriving stock (Eq, Ord, Show)
+  deriving stock ( Eq, Ord, Show )
 
 -- | Print the cabal component type as expected in cabal colon syntax
 -- @pkg:ty:comp@.

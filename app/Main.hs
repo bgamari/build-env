@@ -22,6 +22,7 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
+  ( createDirectoryIfMissing, doesDirectoryExist )
 
 -- text
 import qualified Data.Text as Text
@@ -66,7 +67,7 @@ main = do
                       , buildStrategy
                       , buildRawPaths = rawPaths
                       , mbOnlyDepsOf
-                      , eventLogDir
+                      , eventLogDir = eventLogDir0
                       , userUnitArgs } ) -> do
       plan <- getPlan delTemp verbosity workDir compiler cabal mbIndexState buildBuildPlan
       ( pathsForPrep@( Paths { fetchDir }), pathsForBuild )
@@ -87,6 +88,7 @@ main = do
                 in Just $ mapMaybePlanUnits wantUnit plan
 
       let resumeBuild = case buildStart of { Resume -> True; _ -> False }
+      eventLogDir <- traverse ( makeAbsolute workDir ) eventLogDir0
       buildPlan verbosity workDir pathsForPrep pathsForBuild eventLogDir
         buildStrategy resumeBuild mbOnlyDepsOfUnits userUnitArgs plan
 
