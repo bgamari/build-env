@@ -19,6 +19,7 @@ module BuildEnv.Path
   , interpretSymbolicPath
   , getSymbolicPath
   , getAbsolutePath
+  , relativeSymbolicPath
   , absoluteSymbolicPath
   , makeAbsolute
 
@@ -133,6 +134,9 @@ getSymbolicPath ( SymbolicPath p ) = p
 getAbsolutePath :: AbsolutePath to -> FilePath
 getAbsolutePath ( AbsolutePath p ) = getSymbolicPath p
 
+relativeSymbolicPath :: RelativePath from to -> SymbolicPath from to
+relativeSymbolicPath ( SymbolicPath p ) = SymbolicPath p
+
 absoluteSymbolicPath :: AbsolutePath to -> SymbolicPath from to
 absoluteSymbolicPath ( AbsolutePath p ) = p
 
@@ -202,7 +206,7 @@ instance
     else SymbolicPath (p1 </> p2)
 
 instance
-  ( b1 ~ 'Dir b2, c2 ~ c3, midAbsolute ~ OnlyRelative )
+  ( b1 ~ 'Dir b2, c2 ~ c3 )
   => PathLike
       ( AbsolutePath                 b1 )
       ( SymbolicPathX midAbsolute b2 c2 )

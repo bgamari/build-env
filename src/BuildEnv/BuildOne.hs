@@ -1,6 +1,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 
@@ -20,8 +21,6 @@ module BuildEnv.BuildOne
 
     -- * Package directory structure helpers
 
-    -- $twoDBs
-
   , PkgDir(..)
   , getPkgDir
   , PkgDbDir(..)
@@ -29,8 +28,6 @@ module BuildEnv.BuildOne
   ) where
 
 -- base
-import Control.Concurrent
-  ( QSem, newQSem )
 import Data.Foldable
   ( for_ )
 import Data.Kind
@@ -46,6 +43,7 @@ import qualified Data.Map.Strict as Map
 
 -- directory
 import System.Directory
+  ( doesFileExist )
 
 -- text
 import Data.Text
@@ -59,8 +57,7 @@ import BuildEnv.CabalPlan
 import BuildEnv.Script
 import BuildEnv.Path
 import BuildEnv.Utils
-  ( ProgPath(..), CallProcess(..)
-  , abstractQSem, noSem
+  ( Program(..), CallProcess(..)
   )
 
 --------------------------------------------------------------------------------
@@ -70,7 +67,6 @@ import BuildEnv.Utils
 --
 -- Returns a build script which compiles the @Setup@ script.
 setupPackage :: Verbosity
-             -> Compiler
              -> SymbolicPath CWD ( Dir Project )
              -> BuildPaths ForBuild -- ^ Overall build directory structure.
              -> PkgDbDir   ForBuild -- ^ Package database directory (see 'getPkgDbDirForBuild').
@@ -78,9 +74,8 @@ setupPackage :: Verbosity
              -> PkgDir     ForBuild -- ^ Package directory (to build the @Setup.hs@).
              -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
              -> ConfiguredUnit      -- ^ The unit to build.
-             -> IO BuildScript
+             -> IO ( BuildScript Pkg ( ProcessEnv Pkg ) )
 setupPackage verbosity
-             ( Compiler { ghcPath } )
              workDir
              paths@( BuildPaths { installDir, logDir } )
              ( PkgDbDirForBuild { finalPkgDbDir } )
@@ -91,7 +86,7 @@ setupPackage verbosity
 
   = do let logPath :: Maybe ( AbsolutePath File )
            logPath
-             | verbosity <= Quiet
+             | True || verbosity <= Quiet
              = Nothing
              | otherwise
              = Just $ logDir </> mkRelativePath ( Text.unpack ( unUnitId puId ) )
@@ -125,17 +120,21 @@ setupPackage verbosity
                  , let dep = lookupDependency unit depUnitId plan
                  , dep_cu <- maybeToList $ configuredUnitMaybe dep
                  ]
+             pkgEnv =
+               ProcessEnv
+                 { cwd          = workDir </> buildPkgDir
+                 , extraPATH    = binDirs
+                 , extraEnvVars = setupDepDataDirs
+                 , logBasePath  = logPath
+                 }
          logMessage verbosity Verbose $
            "Compiling Setup.hs for " <> pkgNameVer
          callProcess @Pkg $
-           CP { cwd          = workDir </> buildPkgDir
-              , prog         = AbsPath ghcPath
-              , args         = setupArgs
-              , extraPATH    = binDirs
-              , extraEnvVars = setupDepDataDirs
-              , logBasePath  = logPath
-              , sem          = noSem
+           CP { prog     = GhcProgram
+              , args     = setupArgs
+              , lockFile = Nothing
               }
+         return pkgEnv
 
 -- | Find the @Setup.hs@/@Setup.lhs@ file to use,
 -- or create one using @main = defaultMain@ if none exist.
@@ -188,14 +187,12 @@ buildUnit :: Verbosity
           -> UnitArgs            -- ^ Extra arguments for this unit.
           -> Map UnitId PlanUnit -- ^ All dependencies in the build plan.
           -> ConfiguredUnit      -- ^ The unit to build.
-          -> BuildScript
+          -> BuildScript Pkg ( ProcessEnv Pkg )
 buildUnit verbosity
-          ( Compiler { ghcPath, ghcPkgPath } )
+          ( Compiler { ghcPath } )
           workDir
           paths@( BuildPaths { installDir, prefix, logDir } )
-          ( PkgDbDirForBuild
-            { finalPkgDbDir
-            , finalPkgDbSem } )
+          ( PkgDbDirForBuild { finalPkgDbDir } )
           ( PkgDir { pkgDir, pkgNameVer } )
           ( UnitArgs { configureArgs = userConfigureArgs
                      , mbHaddockArgs = mbUserHaddockArgs
@@ -205,7 +202,7 @@ buildUnit verbosity
         thisUnit'sId = Text.unpack $ unUnitId puId
         logPath :: Maybe ( AbsolutePath File )
         logPath
-          | verbosity <= Quiet
+          | True || verbosity <= Quiet
           = Nothing
           | otherwise
           = Just $ logDir </> mkRelativePath thisUnit'sId
@@ -214,8 +211,6 @@ buildUnit verbosity
           = pkgNameVer <> ":" <> compName
           | otherwise
           = compName
-        setupDir :: SymbolicPath CWD ( Dir Pkg )
-        setupDir = workDir </> pkgDir
 
     in do
       scriptCfg <- askScriptConfig
@@ -291,36 +286,37 @@ buildUnit verbosity
                       installDir </> mkRelativePath ( "bin" </> Text.unpack ( unUnitId exeUnitId ) )
                     | exeUnitId <- puExeDepends ]
 
-          setupExe :: ProgPath Pkg
-          setupExe = RelPath $ runCwdExe scriptCfg "Setup" -- relative to pkgDir
+          pkgEnv =
+            ProcessEnv
+              { cwd          = workDir </> pkgDir
+              , extraPATH    = binDirs
+              , extraEnvVars = setupEnvVars
+              , logBasePath  = logPath
+              }
+
+          setupExe :: Program Pkg
+          setupExe =
+            SetupProgram $ runExe scriptCfg "Setup"
 
       logMessage verbosity Verbose $
         "Configuring " <> unitPrintableName
       logMessage verbosity Debug $
         "Configure arguments:\n" <> unlines ( map ( "  " <> ) configureArgs )
       callProcess @Pkg $
-        CP { cwd          = setupDir
-           , prog         = setupExe
-           , args         = "configure" : configureArgs
-           , extraPATH    = binDirs
-           , extraEnvVars = setupEnvVars
-           , logBasePath  = logPath
-           , sem          = noSem
+        CP { prog     = setupExe
+           , args     = "configure" : configureArgs
+           , lockFile = Nothing
            }
 
       -- Build
       logMessage verbosity Verbose $
         "Building " <> unitPrintableName
       callProcess @Pkg $
-        CP { cwd          = setupDir
-           , prog         = setupExe
-           , args         = [ "build"
-                            , "--builddir=" <> buildDir
-                            , setupVerbosity verbosity ]
-           , extraPATH    = binDirs
-           , extraEnvVars = setupEnvVars
-           , logBasePath  = logPath
-           , sem          = noSem
+        CP { prog     = setupExe
+           , args     = [ "build"
+                        , "--builddir=" <> buildDir
+                        , setupVerbosity verbosity ]
+           , lockFile = Nothing
            }
 
       -- Haddock
@@ -328,32 +324,24 @@ buildUnit verbosity
         logMessage verbosity Verbose $
           "Building documentation for " <> unitPrintableName
         callProcess @Pkg $
-          CP { cwd          = setupDir
-             , prog         = setupExe
-             , args         = [ "haddock"
-                              , setupVerbosity verbosity ]
-                              ++ userHaddockArgs
-                              ++ [ "--builddir=" <> buildDir ]
-             , extraPATH    = binDirs
-             , extraEnvVars = setupEnvVars
-             , logBasePath  = logPath
-             , sem          = noSem
+          CP { prog     = setupExe
+             , args     = [ "haddock"
+                          , setupVerbosity verbosity ]
+                          ++ userHaddockArgs
+                          ++ [ "--builddir=" <> buildDir ]
+             , lockFile = Nothing
              }
 
        -- Copy
       logMessage verbosity Verbose $
         "Copying " <> unitPrintableName
       callProcess @Pkg $
-        CP { cwd          = setupDir
-           , prog         = setupExe
-           , args         = [ "copy", setupVerbosity verbosity
-                            , "--builddir=" <> buildDir
-                            , "--target-package-db=" <> quoteArg ExpandVars scriptCfg (getAbsolutePath $ installDir </> mkRelativePath "package.conf")
-                            ]
-           , extraPATH    = []
-           , extraEnvVars = setupEnvVars
-           , logBasePath  = logPath
-           , sem          = noSem
+        CP { prog     = setupExe
+           , args     = [ "copy", setupVerbosity verbosity
+                        , "--builddir=" <> buildDir
+                        , "--target-package-db=" <> quoteArg ExpandVars scriptCfg (getAbsolutePath $ installDir </> mkRelativePath "package.conf")
+                        ]
+           , lockFile = Nothing
            }
 
        -- Register
@@ -369,15 +357,11 @@ buildUnit verbosity
 
           -- Setup register
           callProcess @Pkg $
-            CP { cwd          = setupDir
-               , prog         = setupExe
-               , args         = [ "register", setupVerbosity verbosity
-                                , "--builddir=" <> buildDir
-                                , "--gen-pkg-config=" <> pkgRegsFile ]
-               , extraPATH    = []
-               , extraEnvVars = []
-               , logBasePath  = logPath
-               , sem          = noSem
+            CP { prog     = setupExe
+               , args     = [ "register", setupVerbosity verbosity
+                            , "--builddir=" <> buildDir
+                            , "--gen-pkg-config=" <> pkgRegsFile ]
+               , lockFile = Nothing
                }
 
           -- NB: we have configured & built a single target,
@@ -389,20 +373,19 @@ buildUnit verbosity
                    , " in package database at:\n"
                    , show finalPkgDbDir ]
 
+          -- Ninja todo: split this off into a separate step
+          -- so that we can ensure it is not run concurrently in a Ninja script.
+
           -- ghc-pkg register
           callProcess @Pkg $
-            CP { cwd          = setupDir
-               , prog         = AbsPath ghcPkgPath
-               , args         = [ "register"
-                                , ghcPkgVerbosity verbosity
-                                , "--force" ]
-                                ++ userGhcPkgArgs
-                                ++ [ "--package-db", quoteArg ExpandVars scriptCfg ( getAbsolutePath finalPkgDbDir )
-                                   , pkgRegsFile ]
-               , extraPATH    = []
-               , extraEnvVars = []
-               , logBasePath  = logPath
-               , sem          = abstractQSem finalPkgDbSem
+            CP { prog     = GhcPkgProgram
+               , args     = [ "register"
+                            , ghcPkgVerbosity verbosity
+                            , "--force" ]
+                            ++ userGhcPkgArgs
+                            ++ [ "--package-db", quoteArg ExpandVars scriptCfg ( getAbsolutePath finalPkgDbDir )
+                               , pkgRegsFile ]
+               , lockFile = Just finalPkgDbDir
                  -- Take a lock to avoid contention on the package database
                  -- when building units concurrently.
                }
@@ -411,10 +394,11 @@ buildUnit verbosity
 
       logMessage verbosity Normal $ "Finished building " <> unitPrintableName
       reportProgress verbosity
+      return pkgEnv
 
 -- | The argument @-package-id PKG_ID@.
 unitIdArg :: UnitId -> String
-unitIdArg (UnitId unitId) = "-package-id " <> Text.unpack unitId
+unitIdArg ( UnitId unitId ) = "-package-id " <> Text.unpack unitId
 
 -- | The target to configure and build.
 buildTarget :: ConfiguredUnit -> String
@@ -472,27 +456,19 @@ data instance PkgDbDir ForBuild
   = PkgDbDirForBuild
     { finalPkgDbDir :: !( AbsolutePath ( Dir PkgDb ) )
         -- ^ Installation package database directory.
-    , finalPkgDbSem :: !QSem
-        -- ^ Semaphore controlling access to the installation
-        -- package database.
     }
 
 -- | Compute the paths of the package database directory we are going
 -- to use.
 getPkgDbDirForPrep :: Paths ForPrep -> PkgDbDir ForPrep
 getPkgDbDirForPrep ( Paths { buildPaths = BuildPathsForPrep { installDir } } ) =
-    PkgDbDirForPrep { finalPkgDbDir = installDir </> mkRelativePath "package.conf" }
+  PkgDbDirForPrep { finalPkgDbDir = installDir </> mkRelativePath "package.conf" }
 
 -- | Compute the paths of the package database directory we are going
--- to use, and create some semaphores to control access to it
--- in order to avoid contention.
-getPkgDbDirForBuild :: Paths ForBuild -> IO (PkgDbDir ForBuild)
-getPkgDbDirForBuild ( Paths { buildPaths = BuildPaths { installDir } } ) = do
-  finalPkgDbSem <- newQSem 1
-  return $
-    PkgDbDirForBuild { finalPkgDbDir, finalPkgDbSem }
-    where
-      finalPkgDbDir = installDir </> mkRelativePath "package.conf"
+-- to use.
+getPkgDbDirForBuild :: Paths ForBuild -> PkgDbDir ForBuild
+getPkgDbDirForBuild ( Paths { buildPaths = BuildPaths { installDir } } ) =
+  PkgDbDirForBuild { finalPkgDbDir = installDir </> mkRelativePath "package.conf"  }
 
 -- | The package @name-version@ string and its directory.
 type PkgDir :: PathUsability -> Type
@@ -524,10 +500,10 @@ getPkgDir ( Paths { fetchDir } )
         | otherwise
         = fetchDir </> mkRelativePath pkgNameVer
 
--- | Command to run an executable located the current working directory.
-runCwdExe :: ScriptConfig -> String -> SymbolicPath from File
-runCwdExe ( ScriptConfig { scriptOutput, scriptStyle } )
-  = mkSymbolicPath . pre . ext
+-- | Command to run an executable.
+runExe :: ScriptConfig -> String -> RelativePath Pkg File
+runExe ( ScriptConfig { scriptOutput, scriptStyle } )
+  = mkRelativePath . pre . ext
   where
     pre
       | Run <- scriptOutput

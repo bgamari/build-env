@@ -17,7 +17,8 @@
 --
 module BuildEnv.Utils
     ( -- * Call a process in a given environment
-      ProgPath(..), CallProcess(..), callProcessInIO
+      Program(..), programPath
+    , CallProcess(..), callProcessInIO
 
       -- * Create temporary directories
     , TempDirPermanence(..)
@@ -25,7 +26,7 @@ module BuildEnv.Utils
 
       -- * Abstract semaphores
     , AbstractSem(..)
-    , withNewAbstractSem, noSem, abstractQSem
+    , withNewAbstractSem, abstractQSem
 
       -- * Other utilities
     , splitOn
@@ -68,6 +69,10 @@ import qualified Data.Map.Strict as Map
 import System.Directory
   ( createDirectoryIfMissing )
 
+-- fileloc
+import qualified System.FileLock as FileLock
+  ( SharedExclusive(..), withFileLock )
+
 -- filepath
 import System.FilePath
   ( takeDirectory )
@@ -93,43 +98,56 @@ import System.IO.Temp
 -- build-env
 import BuildEnv.Config
   ( Args, AsyncSem(..)
+  , Compiler(..), Cabal(..)
   , Counter(..)
   , TempDirPermanence(..)
+  , ProcessEnv(..)
   , pATHSeparator, hostStyle
   )
 import BuildEnv.Path
 
 --------------------------------------------------------------------------------
 
--- | The path of a program to run.
-type ProgPath :: Type -> Type
-data ProgPath from
-  -- | An absolute path, or an executable in @PATH@.
-  = AbsPath { absProgPath :: !( AbsolutePath File ) }
-  -- | A relative path, relative to the @from@ abstract location.
-  | RelPath { relProgPath :: !( SymbolicPath from File ) }
+-- | A program used by @build-env@.
+type Program :: Type -> Type
+data Program dir
+  -- | The @cabal@ program (@cabal-install@)
+  = CabalProgram
+  -- | The @ghc@ program.
+  | GhcProgram
+  -- |The @ghc-pkg@ program.
+  | GhcPkgProgram
+  -- | The Setup executable of a package.
+  | SetupProgram ( RelativePath dir File )
+
+programPath :: Compiler -> Cabal -> Program dir -> SymbolicPath dir File
+programPath compiler cabal = \case
+  CabalProgram      -> absoluteSymbolicPath $ cabalPath  cabal
+  GhcProgram        -> absoluteSymbolicPath $ ghcPath    compiler
+  GhcPkgProgram     -> absoluteSymbolicPath $ ghcPkgPath compiler
+  SetupProgram path -> relativeSymbolicPath path
+
+absoluteProgramPath :: SymbolicPath CWD ( Dir dir )
+                    -> Compiler -> Cabal
+                    -> Program dir
+                    -> IO ( AbsolutePath File )
+absoluteProgramPath workDir compiler cabal = \case
+  CabalProgram      -> return $ cabalPath  cabal
+  GhcProgram        -> return $ ghcPath    compiler
+  GhcPkgProgram     -> return $ ghcPkgPath compiler
+  SetupProgram path -> makeAbsolute workDir $ relativeSymbolicPath path
+
 
 -- | Arguments to 'callProcess'.
 data CallProcess dir
-  = CP
-  { cwd          :: !( SymbolicPath CWD ( Dir dir ) )
-     -- ^ Working directory.
-  , extraPATH    :: ![ FilePath ]
-     -- ^ Absolute filepaths to add to PATH.
-  , extraEnvVars :: ![ ( String, String ) ]
-     -- ^ Extra environment variables to add before running the command.
-  , prog         :: !( ProgPath dir )
+  = forall to
+  . CP
+  { prog         :: !( Program dir )
      -- ^ The program to run.
-     --
-     -- If it's a relative path, it should be relative to the @cwd@ field.
   , args         :: !Args
      -- ^ Arguments to the program.
-  , logBasePath  :: !( Maybe ( AbsolutePath File ) )
-     -- ^ Log @stdout@ to @basePath.stdout@ and @stderr@ to @basePath.stderr@.
-  , sem          :: !AbstractSem
-     -- ^ Lock to take when calling the process
-     -- and waiting for it to return, to avoid
-     -- contention in concurrent situations.
+  , lockFile     :: !( Maybe ( AbsolutePath to ) )
+     -- ^ Optional file or directory to lock for this process invocation.
   }
 
 -- | Run a command and wait for it to complete.
@@ -138,79 +156,88 @@ data CallProcess dir
 --
 -- See 'CallProcess' for a description of the options.
 callProcessInIO :: HasCallStack
-                => Maybe Counter
+                => Compiler
+                -> Cabal
+                -> ProcessEnv dir
+                -> Maybe Counter
                     -- ^ Optional counter. Used when the command fails,
                     -- to report the progress that has been made so far.
                 -> CallProcess dir
                 -> IO ()
-callProcessInIO mbCounter ( CP { cwd, extraPATH, extraEnvVars, prog, args, logBasePath, sem } ) = do
-  absProg <-
-    case prog of
-      AbsPath p -> return p
-      RelPath p -> makeAbsolute cwd p
-        -- Needs to be an absolute path, as per the @process@ documentation:
-        --
-        --   If cwd is provided, it is implementation-dependent whether
-        --   relative paths are resolved with respect to cwd or the current
-        --   working directory, so absolute paths should be used
-        --   to ensure portability.
-        --
-        -- We always want the program to be interpreted relative to the cwd
-        -- argument, so we prepend @cwd@ and then make it absolute.
-  let argsStr
-        | null args = ""
-        | otherwise = " " ++ unwords args
-      command =
-        [ "  > " ++ show absProg ++ argsStr
-        , "  CWD = " ++ show cwd ]
-  env <-
-    if null extraPATH && null extraEnvVars
-    then return Nothing
-    else do env0 <- getEnvironment
-            let env1 = Map.fromList $ env0 ++ extraEnvVars
-                env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
-            return $ Just env2
-  let withHandles :: ( ( Proc.StdStream, Proc.StdStream ) -> IO () ) -> IO ()
-      withHandles action = case logBasePath of
-        Nothing -> action ( Proc.Inherit, Proc.Inherit )
-        Just logPath -> do
-          let stdoutFile = logPath <.> "stdout"
-              stderrFile = logPath <.> "stderr"
-          createDirectoryIfMissing True $ takeDirectory $ getAbsolutePath logPath
-          withFile ( getAbsolutePath stdoutFile ) AppendMode \ stdoutFileHandle ->
-            withFile ( getAbsolutePath stderrFile ) AppendMode \ stderrFileHandle -> do
-              hDuplicateTo System.Handle.stderr stderrFileHandle
-                -- Write stderr to the log file and to the terminal.
-              hPutStrLn stdoutFileHandle ( unlines command )
-              action ( Proc.UseHandle stdoutFileHandle, Proc.UseHandle stderrFileHandle )
-  withHandles \ ( stdoutStream, stderrStream ) -> do
-    let processArgs =
-          ( Proc.proc ( getAbsolutePath absProg ) args )
-            { Proc.cwd     = if getSymbolicPath cwd == "." then Nothing else Just ( getSymbolicPath cwd )
-            , Proc.env     = env
-            , Proc.std_out = stdoutStream
-            , Proc.std_err = stderrStream }
-    res <- withAbstractSem sem do
-      (_, _, _, ph) <- Proc.createProcess_ "createProcess" processArgs
-        -- Use 'createProcess_' to avoid closing handles prematurely.
-      Proc.waitForProcess ph
-    case res of
-      ExitSuccess -> return ()
-      ExitFailure i -> do
-        progressReport <-
-          case mbCounter of
-            Nothing -> return []
-            Just ( Counter { counterRef, counterMax } ) -> do
-              progress <- readIORef counterRef
-              return $ [ "After " <> show progress <> " of " <> show counterMax ]
-        let msg = [ "callProcess failed with non-zero exit code " ++ show i ++ ". Command:" ]
-                     ++ command ++ progressReport
-        case stderrStream of
-          Proc.UseHandle errHandle ->
-            hPutStrLn errHandle
-              ( unlines $ msg ++ [ "Logs are available at: " <> getAbsolutePath logs <> ".{stdout, stderr}" | logs <- maybeToList logBasePath ] )
-          _ -> putStrLn (unlines msg)
-        exitWith res
+callProcessInIO compiler cabal ( ProcessEnv workDir extraPATH extraEnvVars logBasePath ) mbCounter
+  ( CP { prog, args, lockFile } ) = do
+    absProgPath <- absoluteProgramPath workDir compiler cabal prog
+      -- Needs to be an absolute path, as per the @process@ documentation:
+      --
+      --   If cwd is provided, it is implementation-dependent whether
+      --   relative paths are resolved with respect to cwd or the current
+      --   working directory, so absolute paths should be used
+      --   to ensure portability.
+      --
+      -- We always want the program to be interpreted relative to the cwd
+      -- argument, so we prepend @cwd@ and then make it absolute.
+    let argsStr
+          | null args = ""
+          | otherwise = " " ++ unwords args
+        command =
+          [ "  > " ++ show absProgPath ++ argsStr
+          , "  CWD = " ++ show workDir ]
+    env <-
+      if null extraPATH && null extraEnvVars
+      then return Nothing
+      else do env0 <- getEnvironment
+              let env1 = Map.fromList $ env0 ++ extraEnvVars
+                  env2 = Map.toList $ augmentSearchPath "PATH" extraPATH env1
+              return $ Just env2
+    let withHandles :: ( ( Proc.StdStream, Proc.StdStream ) -> IO () ) -> IO ()
+        withHandles action =
+          case logBasePath of
+            Nothing -> action ( Proc.Inherit, Proc.Inherit )
+            Just logPath -> do
+              let stdoutFile = logPath <.> "stdout"
+                  stderrFile = logPath <.> "stderr"
+              createDirectoryIfMissing True $ takeDirectory $ getAbsolutePath logPath
+              withFile ( getAbsolutePath stdoutFile ) AppendMode \ stdoutFileHandle ->
+                withFile ( getAbsolutePath stderrFile ) AppendMode \ stderrFileHandle -> do
+                  hDuplicateTo System.Handle.stderr stderrFileHandle
+                    -- Write stderr to the log file and to the terminal.
+                  hPutStrLn stdoutFileHandle ( unlines command )
+                  action ( Proc.UseHandle stdoutFileHandle, Proc.UseHandle stderrFileHandle )
+    withHandles \ ( stdoutStream, stderrStream ) -> do
+      let processArgs =
+            ( Proc.proc ( getAbsolutePath absProgPath ) args )
+              { Proc.cwd     = if getSymbolicPath workDir == "." then Nothing else Just ( getSymbolicPath workDir )
+              , Proc.env     = env
+              , Proc.std_out = stdoutStream
+              , Proc.std_err = stderrStream }
+      res <- withMaybeFileLock lockFile do
+        (_, _, _, ph) <- Proc.createProcess_ "createProcess" processArgs
+          -- Use 'createProcess_' to avoid closing handles prematurely.
+        Proc.waitForProcess ph
+      case res of
+        ExitSuccess -> return ()
+        ExitFailure i -> do
+          progressReport <-
+            case mbCounter of
+              Nothing -> return []
+              Just ( Counter { counterRef, counterMax } ) -> do
+                progress <- readIORef counterRef
+                return $ [ "After " <> show progress <> " of " <> show counterMax ]
+          let msg = [ "callProcess failed with non-zero exit code " ++ show i ++ ". Command:" ]
+                       ++ command ++ progressReport
+          case stderrStream of
+            Proc.UseHandle errHandle ->
+              hPutStrLn errHandle
+                ( unlines $ msg ++ [ "Logs are available at: " <> getAbsolutePath logs <> ".{stdout, stderr}" | logs <- maybeToList logBasePath ] )
+            _ -> putStrLn $ unlines msg
+          exitWith res
+
+-- | Do something while taking a lock on a file or directory.
+withMaybeFileLock :: Maybe ( AbsolutePath to ) -> IO a -> IO a
+withMaybeFileLock mbLocked action = case mbLocked of
+  Nothing     -> action
+  Just locked -> FileLock.withFileLock ( getAbsolutePath locked <.> "lock" ) FileLock.Exclusive
+               $ const action
 
 -- | Add filepaths to the given key in a key/value environment.
 augmentSearchPath :: Ord k => k -> [FilePath] -> Map k String -> Map k String
@@ -277,10 +304,6 @@ withNewAbstractSem whatSem f =
     jsemGhcArg :: System.SemaphoreName -> String
     jsemGhcArg ( System.SemaphoreName jsemName ) =
       "--ghc-option=-jsem=" <> jsemName
-
--- | No acquire/release mechanism required.
-noSem :: AbstractSem
-noSem = AbstractSem { withAbstractSem = id }
 
 -- | Abstract acquire/release mechanism controlled by the given 'QSem'.
 abstractQSem :: QSem -> AbstractSem

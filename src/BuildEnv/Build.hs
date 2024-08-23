@@ -79,8 +79,7 @@ import qualified Data.Set as Set
 
 -- directory
 import System.Directory
-  ( createDirectoryIfMissing
-  , doesDirectoryExist, doesFileExist
+  ( doesDirectoryExist, doesFileExist
   , exeExtension, listDirectory
   , removeDirectoryRecursive
   )
@@ -107,18 +106,19 @@ import BuildEnv.CabalPlan
 import qualified BuildEnv.CabalPlan as Configured
   ( ConfiguredUnit(..) )
 import BuildEnv.Config
+import BuildEnv.Ninja
+  ( ninja )
 import BuildEnv.Script
-  ( BuildScript, ScriptOutput(..), ScriptConfig(..)
-  , emptyBuildScript
-  , executeBuildScript, script
-  , createDir
-  , logMessage
+  ( BuildScript, BuildSteps, ScriptOutput(..), ScriptConfig(..)
+  , buildSteps, executeBuildScript, executeBuildScriptNoProcessEnv
+  , shellScriptHeader, shellScriptSteps, createDir, logMessage
   )
 import BuildEnv.Utils
-  ( ProgPath(..), CallProcess(..), callProcessInIO, withTempDir
-  , AbstractSem(..), noSem, withNewAbstractSem
+  ( Program(..), CallProcess(..), callProcessInIO, withTempDir
+  , AbstractSem(..), withNewAbstractSem
   )
 import BuildEnv.Path
+import Data.Either (fromRight)
 
 --------------------------------------------------------------------------------
 -- Planning.
@@ -161,16 +161,19 @@ computePlan delTemp verbosity comp cabal _workDir ( CabalFilesContents { cabalCo
             , "--dry-run"
             , "--with-compiler", getAbsolutePath ( ghcPath comp )
             , cabalVerbosity verbosity ]
+        procEnv =
+          ProcessEnv
+            { cwd          = absoluteSymbolicPath tmpDir
+            , extraPATH    = []
+            , extraEnvVars = []
+            , logBasePath  = Nothing
+            }
     debugMsg verbosity $
       Text.unlines $ "cabal" : map ( ( "  " <> ) . Text.pack ) cabalBuildArgs
-    callProcessInIO @Tmp Nothing $
-      CP { cwd          = absoluteSymbolicPath tmpDir
-         , prog         = AbsPath $ cabalPath cabal
-         , args         = cabalBuildArgs
-         , extraPATH    = []
-         , extraEnvVars = []
-         , logBasePath  = Nothing
-         , sem          = noSem
+    callProcessInIO @Tmp comp cabal procEnv Nothing $
+      CP { prog     = CabalProgram
+         , args     = cabalBuildArgs
+         , lockFile = Nothing
          }
 
     let planPath :: FilePath
@@ -348,7 +351,8 @@ fetchPlan verbosity cabal workDir mbIndexState fetchDir cabalPlan =
       _ -> Nothing
 
 -- | Call @cabal get@ to fetch a single package from Hackage.
-cabalFetch :: Verbosity -> Cabal
+cabalFetch :: Verbosity
+           -> Cabal
            -> SymbolicPath CWD ( Dir Project )
            -> Maybe IndexState
            -> SymbolicPath Project ( Dir Fetch )
@@ -362,14 +366,18 @@ cabalFetch verbosity cabal workDir mbIndexState root pkgNmVer = do
                  , cabalVerbosity verbosity ]
                  ++ [ "--index-state=" <> Text.unpack indexState
                     | IndexState indexState <- maybeToList mbIndexState ]
-    callProcessInIO @Fetch Nothing $
-      CP { cwd          = workDir </> root
-         , prog         = AbsPath $ cabalPath cabal
+        procEnv =
+          ProcessEnv
+            { cwd = workDir </> root
+            , extraEnvVars = []
+            , extraPATH = []
+            , logBasePath = Nothing
+            }
+    callProcessInIO @Fetch ( error "ghc not needed" ) cabal procEnv Nothing $
+      CP { prog     = CabalProgram
          , args
-         , extraPATH    = []
-         , extraEnvVars = []
-         , logBasePath  = Nothing
-         , sem          = noSem }
+         , lockFile = Nothing
+        }
 
 --------------------------------------------------------------------------------
 -- Building.
@@ -384,7 +392,7 @@ buildPlan :: Verbosity
               -- and to choose a logging directory.
           -> Paths ForPrep
           -> Paths ForBuild
-          -> Maybe ( SymbolicPath Project ( Dir Logs ) )
+          -> Maybe ( AbsolutePath ( Dir Logs ) )
               -- ^ event log directory
           -> BuildStrategy
           -> Bool
@@ -418,8 +426,11 @@ buildPlan verbosity workDir
         pkgDbDirForPrep
           = getPkgDbDirForPrep pathsForPrep
 
-    pkgDbDirs@( PkgDbDirForBuild { finalPkgDbDir } )
-      <- getPkgDbDirForBuild pathsForBuild
+        pkgDbDirs@( PkgDbDirForBuild { finalPkgDbDir } )
+          = getPkgDbDirForBuild pathsForBuild
+
+        cabal :: Cabal
+        cabal = error "cabal-install not needed for buildPlan"
 
     -- Check the package database exists when it should,
     -- and delete it if we are starting fresh.
@@ -431,9 +442,6 @@ buildPlan verbosity workDir
             `catch` \ ( _ :: IOException ) -> return ()
        | otherwise
        -> return ()
-
-    for_ mbEventLogDir \ eventLogDir -> do
-      createDirectoryIfMissing True ( interpretSymbolicPath workDir eventLogDir )
 
     verboseMsg verbosity $
       Text.unlines [ "Directory structure:"
@@ -450,25 +458,31 @@ buildPlan verbosity workDir
 
     let
         -- Units to build, in dependency order.
-        unitsToBuild :: [(ConfiguredUnit, Maybe UnitId)]
-        unitsToBuild
-           = tagUnits $ sortPlan mbAlreadyBuilt mbOnlyBuildDepsOf cabalPlan
+        unitsToBuild :: [ ( ConfiguredUnit, Maybe UnitId ) ]
+        unitsToBuild =
+          tagUnits $ sortPlan mbAlreadyBuilt mbOnlyBuildDepsOf cabalPlan
 
         nbUnitsToBuild :: Word
         nbUnitsToBuild = fromIntegral $ length unitsToBuild
 
-        pkgMap :: Map (PkgName, Version) ConfiguredUnit
+        pkgMap :: Map ( PkgName, Version ) ConfiguredUnit
         pkgMap = Lazy.Map.fromList
           [ ((puPkgName, puVersion), cu)
           | ( cu@( ConfiguredUnit { puPkgName, puVersion } ), didSetup ) <- unitsToBuild
           , isNothing didSetup ]
 
         -- Initial preparation: logging, and creating the package database.
-        preparation :: BuildScript
+        preparation :: BuildScript prepDir ()
         preparation = do
           logMessage verbosity Verbose $
             "Creating package database at " <> show finalPkgDbDir
           createDir finalPkgDbDir
+
+          for_ mbEventLogDir \ eventLogDir -> do
+            logMessage verbosity Verbose $
+              "Creating event log directory at " <> show ( getAbsolutePath eventLogDir )
+            createDir eventLogDir
+
           logMessage verbosity Debug $ "Packages:\n" <>
             unlines
               [ "  - " <> Text.unpack (pkgNameVersion nm ver)
@@ -484,20 +498,20 @@ buildPlan verbosity workDir
           logMessage verbosity Normal $ "=== BUILD START ==="
 
         -- Setup the package for this unit.
-        unitSetupScript :: ConfiguredUnit -> IO BuildScript
+        unitSetupScript :: ConfiguredUnit -> IO ( BuildScript Pkg ( ProcessEnv Pkg ) )
         unitSetupScript pu = do
           let pkgDirForPrep  = getPkgDir pathsForPrep  pu
               pkgDirForBuild = getPkgDir pathsForBuild pu
-          setupPackage verbosity compiler
+          setupPackage verbosity
             workDir paths pkgDbDirs pkgDirForPrep pkgDirForBuild
             fullDepMap pu
 
         -- Build and install this unit.
-        unitBuildScript :: Args -> ConfiguredUnit -> BuildScript
+        unitBuildScript :: Args -> ConfiguredUnit -> BuildScript Pkg ( ProcessEnv Pkg )
         unitBuildScript extraConfigureArgs pu@( ConfiguredUnit { puId }) =
           let pkgDirForBuild = getPkgDir pathsForBuild pu
-              mbEventLogArg = mbEventLogDir <&> \ logDir ->
-                let logPath = getSymbolicPath logDir </> "ghc" <.> Text.unpack ( unUnitId puId ) <.> "eventlog"
+              mbEventLogArg = mbEventLogDir <&> \ eventLogDir ->
+                let logPath = getAbsolutePath eventLogDir </> "ghc" <.> Text.unpack ( unUnitId puId ) <.> "eventlog"
                 in "--ghc-option=\"-with-rtsopts=-l-ol" <> logPath <> "\""
               allConfigureArgs =
                 mconcat [ extraConfigureArgs
@@ -505,13 +519,13 @@ buildPlan verbosity workDir
                         , configureArgs ( userUnitArgs pu ) ]
               allUnitArgs =
                 ( userUnitArgs pu ) { configureArgs = allConfigureArgs }
-          in buildUnit verbosity compiler workDir
-                paths pkgDbDirs pkgDirForBuild
-                allUnitArgs
-                fullDepMap pu
+          in buildUnit verbosity compiler
+                 workDir paths pkgDbDirs pkgDirForBuild
+                 allUnitArgs
+                 fullDepMap pu
 
         -- Close out the build.
-        finish :: BuildScript
+        finish :: BuildScript finishDir ()
         finish = do
           logMessage verbosity Normal $ "=== BUILD SUCCEEDED ==="
 
@@ -526,7 +540,10 @@ buildPlan verbosity workDir
                 Counter { counterRef = unitsBuiltCounterRef
                         , counterMax = nbUnitsToBuild }
 
-            execBuildScript = executeBuildScript workDir unitsBuiltCounter
+            executeNoEnv :: BuildScript dir () -> IO ()
+            executeNoEnv = executeBuildScriptNoProcessEnv compiler cabal unitsBuiltCounter
+            execute :: BuildScript Pkg ( ProcessEnv Pkg ) -> IO ()
+            execute = executeBuildScript compiler cabal unitsBuiltCounter
 
         case runStrat of
 
@@ -534,17 +551,17 @@ buildPlan verbosity workDir
 
             normalMsg verbosity $
               "\nBuilding and installing units asynchronously with " <> semDescription sem
-            execBuildScript preparation
+            executeNoEnv preparation
 
             withNewAbstractSem sem \ ( AbstractSem { withAbstractSem } ) semArgs -> do
 
-              let unitMap :: Lazy.Map UnitId (ConfiguredUnit, Maybe UnitId)
+              let unitMap :: Lazy.Map UnitId ( ConfiguredUnit, Maybe UnitId )
                   unitMap =
                     Lazy.Map.fromList
-                      [ (puId, pu)
+                      [ ( puId, pu )
                       | pu@( ConfiguredUnit { puId }, _ ) <- unitsToBuild ]
 
-              (_, unitAsyncs) <- mfix \ ~(pkgAsyncs, unitAsyncs) -> do
+              ( _, unitAsyncs ) <- mfix \ ~( pkgAsyncs, unitAsyncs ) -> do
 
                 let -- Compile the Setup script of the package the unit belongs to.
                     -- (This should happen only once per package.)
@@ -553,12 +570,12 @@ buildPlan verbosity workDir
 
                       -- Wait for the @setup-depends@ units.
                       for_ puSetupDepends \ setupDepId ->
-                        for_ (unitAsyncs Map.!? setupDepId) wait
+                        for_ ( unitAsyncs Map.!? setupDepId ) wait
 
                       -- Setup the package.
                       withAbstractSem do
                         setupScript <- unitSetupScript cu
-                        execBuildScript setupScript
+                        execute setupScript
 
                     -- Configure, build and install the unit.
                     doUnitAsync :: ( ConfiguredUnit, Maybe UnitId ) -> IO ()
@@ -568,52 +585,77 @@ buildPlan verbosity workDir
                           ver = Configured.puVersion pu
 
                       -- Wait for the package to have been setup.
-                      wait $ pkgAsyncs Map.! (nm, ver)
+                      wait $ pkgAsyncs Map.! ( nm, ver )
 
                       -- Wait until we have built the units we depend on.
-                      for_ (unitDepends pu) \ depUnitId ->
-                        for_ (unitAsyncs Map.!? depUnitId) wait
+                      for_ ( unitDepends pu ) \ depUnitId ->
+                        for_ ( unitAsyncs Map.!? depUnitId ) wait
 
                       -- Build the unit!
                       withAbstractSem $
-                        execBuildScript $ unitBuildScript semArgs pu
+                        execute $ unitBuildScript semArgs pu
 
                 -- Kick off setting up the packages...
-                finalPkgAsyncs  <- for pkgMap  (async . doPkgSetupAsync)
+                finalPkgAsyncs  <- for pkgMap  ( async . doPkgSetupAsync )
                 -- ... and building the units.
-                finalUnitAsyncs <- for unitMap (async . doUnitAsync)
-                return (finalPkgAsyncs, finalUnitAsyncs)
+                finalUnitAsyncs <- for unitMap ( async . doUnitAsync )
+                return ( finalPkgAsyncs, finalUnitAsyncs )
               mapM_ wait unitAsyncs
-              execBuildScript finish
+              executeNoEnv finish
 
           TopoSort -> do
             normalMsg verbosity "\nBuilding and installing units sequentially.\n\
                                 \NB: pass -j<N> for increased parallelism."
-            execBuildScript preparation
+            executeNoEnv preparation
             for_ unitsToBuild \ ( cu, didSetup ) -> do
-              when (isNothing didSetup) $
-                unitSetupScript cu >>= execBuildScript
-              execBuildScript (unitBuildScript [] cu)
-            execBuildScript finish
+              when ( isNothing didSetup ) $
+                unitSetupScript cu >>= execute
+              execute $ unitBuildScript [] cu
+            executeNoEnv finish
 
-      Script { scriptPath = fp, useVariables } -> do
+      GenerateScript { scriptPath = fp, scriptType, useVariables } -> do
         let scriptConfig :: ScriptConfig
             scriptConfig =
               ScriptConfig
-                { scriptOutput     = Shell { useVariables }
+                { scriptOutput     = Script { useVariables, scriptType }
                 , scriptStyle      = hostStyle
-                , scriptTotal      = Just nbUnitsToBuild
-                , scriptWorkingDir = workDir }
-
-        normalMsg verbosity $ "\nWriting build scripts to " <> Text.pack ( show fp )
-        buildScripts <- for unitsToBuild \ ( cu, didSetup ) -> do
-          mbSetup <- if   isNothing didSetup
-                     then unitSetupScript cu
-                     else return emptyBuildScript
-          let build = unitBuildScript [] cu
-          return $ mbSetup <> build
-        Text.writeFile ( getSymbolicPath fp ) $ script scriptConfig $
-          preparation <> mconcat buildScripts <> finish
+                , scriptTotal      = Just nbUnitsToBuild }
+            getBuildSteps :: BuildScript dir a -> ( a, BuildSteps dir )
+            getBuildSteps = buildSteps scriptConfig
+            prep, end :: BuildSteps dir
+            prep = snd $ getBuildSteps preparation
+            end  = snd $ getBuildSteps finish
+        buildScripts <-
+          for unitsToBuild \ ( cu, didSetup ) -> do
+            mbSetup <-
+              case didSetup of
+                Nothing -> Right . getBuildSteps <$> unitSetupScript cu
+                Just unitDidSetup -> return $ Left unitDidSetup
+            return $ ( cu, mbSetup, getBuildSteps $ unitBuildScript [] cu )
+        script <-
+          case scriptType of
+            Shell -> do
+              let emptyProcEnv :: ProcessEnv dir
+                  emptyProcEnv =
+                    ProcessEnv
+                      { cwd          = sameDirectory
+                      , extraEnvVars = []
+                      , extraPATH    = []
+                      , logBasePath  = Nothing
+                      }
+              return $
+                mconcat
+                  [ shellScriptHeader scriptConfig
+                  , shellScriptSteps compiler cabal emptyProcEnv scriptConfig prep
+                  , mconcat
+                      [ shellScriptSteps compiler cabal pkgEnv scriptConfig $
+                          fromRight [] ( fmap snd setup ) <> build
+                      | ( _, setup, ( pkgEnv, build ) ) <- buildScripts ]
+                  , shellScriptSteps compiler cabal emptyProcEnv scriptConfig end ]
+            Ninja -> return $ ninja compiler hostStyle fullDepMap paths prep end buildScripts
+        let what = case scriptType of { Shell -> "shell script" ; Ninja -> "ninja file"}
+        normalMsg verbosity $ "\nWriting " <> what <> " to " <> Text.pack ( show fp )
+        Text.writeFile ( getSymbolicPath fp ) script
 
   where
 
@@ -621,7 +663,7 @@ buildPlan verbosity workDir
     -- Unit IDs for dependencies.
     fullDepMap :: Map UnitId PlanUnit
     fullDepMap = Map.fromList
-              [ (planUnitUnitId pu, pu)
+              [ ( planUnitUnitId pu, pu )
               | pu <- planUnits cabalPlan ]
 
 
@@ -634,12 +676,12 @@ sortPlan :: Maybe ( Set UnitId )
              --     to the transitive closure of @keep@.
              --   - @Nothing@ <=> return all units in the plan.
          -> CabalPlan
-         -> [ConfiguredUnit]
+         -> [ ConfiguredUnit ]
 sortPlan mbAlreadyBuilt mbOnlyDepsOf plan =
-    onlyInteresting $ map (fst3 . lookupVertex) $ Graph.reverseTopSort gr
+    onlyInteresting $ map ( fst3 . lookupVertex ) $ Graph.reverseTopSort gr
   where
 
-    onlyInteresting :: [ConfiguredUnit] -> [ConfiguredUnit]
+    onlyInteresting :: [ ConfiguredUnit ] -> [ ConfiguredUnit ]
     onlyInteresting
       -- Fast path: don't filter out anything.
       | isNothing mbAlreadyBuilt
@@ -673,11 +715,11 @@ sortPlan mbAlreadyBuilt mbOnlyDepsOf plan =
                     $ mapMaybe mkVertex onlyDepsOf
               in \ ( ConfiguredUnit { puId } ) -> puId `Set.member` reachableUnits
 
-    fst3 :: (a,b,c) -> a
-    fst3 (a,_,_) = a
+    fst3 :: ( a, b, c ) -> a
+    fst3 ( a, _, _ ) = a
     ( gr, lookupVertex, mkVertex ) =
       Graph.graphFromEdges
-        [ (pu, puId, allDepends pu)
+        [ ( pu, puId, allDepends pu )
         | PU_Configured pu@( ConfiguredUnit { puId } ) <- planUnits plan ]
 
 -- | Tag units in a build plan: the first unit we compile in each package
@@ -685,7 +727,7 @@ sortPlan mbAlreadyBuilt mbOnlyDepsOf plan =
 -- the Setup executable for the package it belongs to, while other units
 -- in this same package are tagged with @'Just' uid@, where @uid@ is the unit
 -- which is responsible for building the Setup executable.
-tagUnits :: [ConfiguredUnit] -> [(ConfiguredUnit, Maybe UnitId)]
+tagUnits :: [ ConfiguredUnit ] -> [ ( ConfiguredUnit, Maybe UnitId ) ]
 tagUnits = go Map.empty
   where
     go _ [] = []

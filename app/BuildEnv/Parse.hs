@@ -439,12 +439,13 @@ build ( NumCapabilities numCaps ) = do
 
     optScript :: Parser BuildStrategy
     optScript = do
-      scriptPath <- optScriptPath
+      scriptPath   <- optScriptPath
+      scriptType   <- optScriptType
       useVariables <-
         switch
           (  long "variables"
           <> help "Use variables in the shell script output ($PREFIX etc)" )
-      pure $ Script { scriptPath, useVariables }
+      pure $ GenerateScript { scriptPath, scriptType, useVariables }
 
     optScriptPath :: Parser ( SymbolicPath CWD File )
     optScriptPath =
@@ -453,6 +454,13 @@ build ( NumCapabilities numCaps ) = do
         <> helpDoc ( Just $  "Output a shell script containing build steps"
                          .$. "  NB: path is interpreted relative to current work dir, NOT --cwd" )
         <> metavar "OUTFILE" )
+
+    optScriptType :: Parser ScriptType
+    optScriptType =
+      flag' Ninja
+        (  long "ninja"
+        <> help "Generate a ninja build script" )
+      <|> pure Shell
 
     optStart :: Parser BuildStart
     optStart =

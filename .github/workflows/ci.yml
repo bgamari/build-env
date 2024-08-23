@@ -66,6 +66,18 @@ jobs:
       - name: "Build build-env executable"
         run: cabal build exe:build-env
 
+      - name: "Install Ninja"
+        uses: lukka/get-cmake@latest
+
+      - name: "Create a Ninja build script for 'attoparsec' and execute it"
+        if: runner.os != 'Windows'
+        working-directory: ./tests/Ninja
+        shell: bash
+        run: |
+          cabal run exe:build-env -- build attoparsec -f sources -o install --script build_atto.ninja --ninja -v2
+          ninja -f build_atto.ninja
+          ghc-pkg --package-db=install/package.conf field attoparsec id
+
       - name: "Build 'c2hs' executable (command line), and restart a build"
         working-directory: ./tests/ExeDeps
         shell: bash
