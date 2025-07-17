@@ -86,7 +86,7 @@ setupPackage verbosity
 
   = do let logPath :: Maybe ( AbsolutePath File )
            logPath
-             | True || verbosity <= Quiet
+             | verbosity <= Quiet
              = Nothing
              | otherwise
              = Just $ logDir </> mkRelativePath ( Text.unpack ( unUnitId puId ) )
@@ -202,7 +202,7 @@ buildUnit verbosity
         thisUnit'sId = Text.unpack $ unUnitId puId
         logPath :: Maybe ( AbsolutePath File )
         logPath
-          | True || verbosity <= Quiet
+          | verbosity <= Quiet
           = Nothing
           | otherwise
           = Just $ logDir </> mkRelativePath thisUnit'sId
@@ -373,9 +373,6 @@ buildUnit verbosity
                    , " in package database at:\n"
                    , show finalPkgDbDir ]
 
-          -- Ninja todo: split this off into a separate step
-          -- so that we can ensure it is not run concurrently in a Ninja script.
-
           -- ghc-pkg register
           callProcess @Pkg $
             CP { prog     = GhcPkgProgram
@@ -388,6 +385,11 @@ buildUnit verbosity
                , lockFile = Just finalPkgDbDir
                  -- Take a lock to avoid contention on the package database
                  -- when building units concurrently.
+
+                 -- Ninja todo: we have ad-hoc logic in the Ninja backend to
+                 -- prevent this step from running concurrently; it would be
+                 -- better to do this based on the presence of a lockfile.
+
                }
 
         _notALib -> return ()
